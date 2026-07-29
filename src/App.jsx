@@ -383,6 +383,7 @@ const ROSTER0 = [
   { id: "m4", name: "宜", role: "大砲" },
   { id: "m5", name: "宋", role: "舉球" },
   { id: "m6", name: "溫", role: "攔中" },
+  { id: "m7", name: "黃", role: "" },
 ];
 const COURT0 = ["m1", "m2", "m3", "m4", "m5", "m6"];
 // 後排依位置固定防守位置（可改；設為 null 即不套用）
@@ -403,7 +404,7 @@ export default function RotationBoard() {
   const [editKey, setEditKey] = useState("recv.P2");
   const [drag, setDrag] = useState(null);
   const svgRef = useRef(null);
-  const idRef = useRef(7);
+  const idRef = useRef(8);
   const readyRef = useRef(false); // 初始載入完成前不啟動自動儲存，避免用預設值蓋掉存檔
 
   /* ---- 儲存／載入（跨工作階段保存） ---- */
@@ -448,7 +449,7 @@ export default function RotationBoard() {
   const clearSaved = async () => {
     try { await store.remove(STORAGE_KEY); } catch { /* 沒有存檔 */ }
     setRoster(ROSTER0); setCourt(COURT0); setAnchors(DEFAULT_ANCHORS); setRoleMap(DEFAULT_ROLE_MAP);
-    idRef.current = 7;
+    idRef.current = 8;
   };
 
   const byId = useMemo(() => Object.fromEntries(roster.map((e) => [e.id, e])), [roster]);
