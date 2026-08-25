@@ -7,33 +7,50 @@ import React, { useState, useMemo, useRef, useEffect } from "react";
    ============================================================ */
 const ROLE_LIST = ["舉球", "大砲", "副攻", "攔中", "自由"];
 const GROUP = { 舉球: "S", 攔中: "M", 副攻: "M", 大砲: "X", 自由: "X" };
+// 全圖切到「位置」模式時圈圈裡顯示的簡稱
+const ROLE_ABBR = { 舉球: "舉", 大砲: "砲", 攔中: "中", 副攻: "背", 自由: "自" };
 
 /* ============================================================
    PART 1 — 定點表（全系統的座標真相）
    接發＝號位制（1–6）　防守＝角色制（FL/FC/FR/BL/BC/BR）
-   防守分兩套：A＝砲背（前排中間是副攻）、M＝砲中（前排中間是攔中）
-   發球圖沿用「中間攻擊」防守座標；發球員固定在場外 SERVE_SV
+   防守分兩套：A＝砲背（前排有副攻）、M＝砲中（前排有攔中）
+   砲中：砲(左) 中(中) 舉(右)　／　砲背：砲(左) 舉(中) 背(右)
+   發球圖用固定的平行陣（SERVE_GRID），格子分配與防守完全同一套規則；
+   1號位是發球員，站在端線外
    ============================================================ */
-const SERVE_SV = [0.74, 1.08]; // 發球員（場外，固定）
+// 發球站位：平行的兩排，格子分配與防守同一套規則（前排看角色、後排看 roleMap）
+const SERVE_GRID = {
+  FL: [0.20, 0.14], FC: [0.50, 0.14], FR: [0.80, 0.14],
+  BL: [0.20, 0.70], BC: [0.50, 0.70], BR: [0.80, 0.70],
+  SV: [0.80, 1.06], // 發球員（1號位）站端線外
+};
 const DEFAULT_ANCHORS = {
   // 使用者的慣用陣型（實際拉點校準）
+  // 接發兩套：R5＝5人接發、R4＝4人接發
   recv: {
-    P2: { 1: [0.746, 0.816], 2: [0.906, 0.115], 3: [0.795, 0.404], 4: [0.168, 0.407], 5: [0.297, 0.816], 6: [0.503, 0.616] },
-    P3: { 1: [0.737, 0.807], 2: [0.805, 0.382], 3: [0.595, 0.127], 4: [0.189, 0.373], 5: [0.312, 0.825], 6: [0.506, 0.598] },
-    P4: { 1: [0.725, 0.822], 2: [0.869, 0.401], 3: [0.152, 0.413], 4: [0.106, 0.099], 5: [0.266, 0.810], 6: [0.491, 0.625] },
+    R5: {
+      P2: { 1: [0.746, 0.816], 2: [0.906, 0.115], 3: [0.795, 0.404], 4: [0.168, 0.407], 5: [0.297, 0.816], 6: [0.503, 0.616] },
+      P3: { 1: [0.737, 0.807], 2: [0.805, 0.382], 3: [0.595, 0.127], 4: [0.189, 0.373], 5: [0.312, 0.825], 6: [0.506, 0.598] },
+      P4: { 1: [0.725, 0.822], 2: [0.869, 0.401], 3: [0.152, 0.413], 4: [0.106, 0.099], 5: [0.266, 0.810], 6: [0.491, 0.625] },
+    },
+    R4: {
+      P2: { 1: [0.847, 0.549], 2: [0.885, 0.135], 3: [0.177, 0.515], 4: [0.051, 0.129], 5: [0.348, 0.795], 6: [0.673, 0.795] },
+      P3: { 1: [0.837, 0.471], 2: [0.594, 0.224], 3: [0.499, 0.112], 4: [0.140, 0.433], 5: [0.341, 0.785], 6: [0.714, 0.768] },
+      P4: { 1: [0.865, 0.518], 2: [0.218, 0.573], 3: [0.071, 0.286], 4: [0.054, 0.091], 5: [0.437, 0.785], 6: [0.741, 0.765] },
+    },
   },
   def: {
-    // M＝砲中（使用者已校準）
+    // M＝砲中（前排中間是攔中）
     M: {
-      L: { FL: [0.177, 0.253], FC: [0.466, 0.155], FR: [0.805, 0.330], BL: [0.171, 0.841], BC: [0.475, 0.798], BR: [0.703, 0.656] },
-      C: { FL: [0.285, 0.342], FC: [0.509, 0.127], FR: [0.762, 0.330], BL: [0.235, 0.708], BC: [0.5, 0.88], BR: [0.786, 0.687] },
-      R: { FL: [0.168, 0.364], FC: [0.602, 0.133], FR: [0.838, 0.265], BL: [0.303, 0.641], BC: [0.568, 0.816], BR: [0.869, 0.844] },
+      L: { FL: [0.153, 0.043], FC: [0.294, 0.310], FR: [0.805, 0.330], BL: [0.171, 0.841], BC: [0.475, 0.798], BR: [0.703, 0.656] },
+      C: { FL: [0.294, 0.334], FC: [0.509, 0.067], FR: [0.718, 0.327], BL: [0.235, 0.708], BC: [0.5, 0.88], BR: [0.786, 0.687] },
+      R: { FL: [0.168, 0.364], FC: [0.851, 0.071], FR: [0.697, 0.313], BL: [0.303, 0.641], BC: [0.568, 0.816], BR: [0.869, 0.844] },
     },
-    // A＝砲背（使用者已校準：背在右、舉在中）
+    // A＝砲背（前排中間是副攻）
     A: {
-      L: { FL: [0.177, 0.253], FC: [0.826, 0.348], FR: [0.506, 0.123], BL: [0.171, 0.841], BC: [0.475, 0.798], BR: [0.703, 0.656] },
-      C: { FL: [0.285, 0.342], FC: [0.725, 0.339], FR: [0.503, 0.154], BL: [0.235, 0.708], BC: [0.5, 0.88], BR: [0.786, 0.687] },
-      R: { FL: [0.168, 0.364], FC: [0.848, 0.290], FR: [0.623, 0.163], BL: [0.303, 0.641], BC: [0.568, 0.816], BR: [0.869, 0.844] },
+      L: { FL: [0.157, 0.050], FC: [0.263, 0.279], FR: [0.826, 0.348], BL: [0.171, 0.841], BC: [0.475, 0.798], BR: [0.703, 0.656] },
+      C: { FL: [0.285, 0.342], FC: [0.499, 0.043], FR: [0.728, 0.339], BL: [0.235, 0.708], BC: [0.5, 0.88], BR: [0.786, 0.687] },
+      R: { FL: [0.168, 0.364], FC: [0.697, 0.313], FR: [0.854, 0.060], BL: [0.303, 0.641], BC: [0.568, 0.816], BR: [0.869, 0.844] },
     },
   },
 };
@@ -45,10 +62,7 @@ const DEF_MAP = { d1: "R", d2: "C", d3: "L" };
    ============================================================ */
 const FRONT = [4, 3, 2]; // 左4 中3 右2
 // 前排中間是副攻 → 用「砲背」那一套定點，否則用「砲中」
-const frontVariant = (occ) => {
-  const m = FRONT.find((p) => GROUP[occ[p].role] === "M");
-  return m && occ[m].role === "副攻" ? "A" : "M";
-};
+const frontVariant = (occ) => (FRONT.some((p) => occ[p].role === "副攻") ? "A" : "M");
 const BACK = [5, 6, 1];  // 左5 中6 右1
 const PIN_SLOT = { L: "BL", C: "BC", R: "BR" };
 const PIN_NAME = { L: "守左", C: "守中", R: "守右" };
@@ -98,28 +112,34 @@ function occupancy(lineup, r) {
 }
 
 function frontByRole(occ, set) {
-  const gs = FRONT.map((p) => GROUP[occ[p].role]);
-  if (gs.some((g) => !g)) return { err: "前排有位置未定" };
-  if (gs.filter((g) => g === "S").length !== 1 || gs.filter((g) => g === "M").length !== 1)
-    return { err: "前排角色組合不符" };
-  return {
-    spots: FRONT.map((p) => ({
-      pos: p, e: occ[p], xy: set[{ X: "FL", M: "FC", S: "FR" }[GROUP[occ[p].role]]],
-    })),
-  };
+  const roles = FRONT.map((p) => occ[p].role);
+  if (roles.some((r) => !GROUP[r])) return { err: "前排有位置未定" };
+  if (roles.filter((r) => r === "舉球").length !== 1) return { err: "前排舉球不是 1 人" };
+  // 前排三格：
+  //   沒有背：砲(其餘)→左、攔中→中、舉球→右
+  //   有背　：其餘→左、舉球→中、背→右
+  const hasBack = roles.includes("副攻");
+  const pivot = hasBack ? "副攻" : "攔中";
+  if (roles.filter((r) => r === pivot).length !== 1) return { err: "前排角色組合不符" };
+  const slotFor = (e) =>
+    hasBack
+      ? (e.role === "副攻" ? "FR" : e.role === "舉球" ? "FC" : "FL")
+      : (e.role === "舉球" ? "FR" : e.role === "攔中" ? "FC" : "FL");
+  return { spots: FRONT.map((p) => ({ pos: p, e: occ[p], xy: set[slotFor(occ[p])] })) };
 }
 
 // 自由球員替上：該員輪到後排即替換；但發球那一格由本人發球（自由不能發球）
 const liberoIn = (e, pos, serve) => !!(e && e.libero) && BACK.includes(pos) && !(serve && pos === 1);
 
 // 站位解析：{ok, spots:[{pos, e, xy, lib}]} 或 {ok:false, reason}
-function formation(lineup, r, sceneId, A, roleMap) {
+function formation(lineup, r, sceneId, A, roleMap, recvMode) {
+  if (lineup.length !== 6 || lineup.some((e) => !e)) return { ok: false, reason: "名單未滿 6 人" };
   const occ = occupancy(lineup, r);
 
   if (sceneId === "recv") {
     const fs = FRONT.filter((p) => occ[p].role === "舉球");
     if (fs.length !== 1) return { ok: false, reason: `前排舉球 ${fs.length} 人` };
-    const set = A.recv["P" + fs[0]];
+    const set = A.recv[recvMode || "R5"]["P" + fs[0]];
     return {
       ok: true,
       spots: [1, 2, 3, 4, 5, 6].map((p) => ({ pos: p, e: occ[p], xy: set[p], lib: liberoIn(occ[p], p, false) })),
@@ -127,14 +147,12 @@ function formation(lineup, r, sceneId, A, roleMap) {
   }
 
   const serve = sceneId === "serve";
-  // 發球沿用「中間攻擊」座標；發球員（1號位）站場外
-  const v = frontVariant(occ);
-  const set = A.def[v][serve ? "C" : DEF_MAP[sceneId]];
+  const set = serve ? SERVE_GRID : A.def[frontVariant(occ)][DEF_MAP[sceneId]];
   const f = frontByRole(occ, set);
   if (f.err) return { ok: false, reason: f.err };
   const spots = [...f.spots];
   backOrder(occ, roleMap).forEach((b, i) => {
-    const xy = serve && b.pos === 1 ? SERVE_SV : set[["BL", "BC", "BR"][i]];
+    const xy = serve && b.pos === 1 ? SERVE_GRID.SV : set[["BL", "BC", "BR"][i]];
     spots.push({ ...b, xy, lib: liberoIn(b.e, b.pos, serve) });
   });
   return { ok: true, spots };
@@ -165,17 +183,19 @@ const ZONE_NAME = { 1: "右後・先發球", 2: "右前", 3: "中前", 4: "左�
    PART 3 — UI
    ============================================================ */
 const C = {
-  paper: "#E7E3D9", dot: "#C6C0B0", court: "#C89264", courtDeep: "#B67F52",
+  paper: "#E7E3D9", dot: "#C6C0B0", court: "#DAB596", courtDeep: "#CDA889",
   line: "#F6F1E8", ink: "#221D17", red: "#C4402B", blue: "#4C9FD4",
   panel: "#FBF9F5", edge: "#D8D2C4", muted: "#7B7365", warn: "#B5552F",
 };
 const FONT = '"Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif';
 const MONO = 'ui-monospace,Menlo,monospace';
 const VB_H = 148;
+// 對方進攻點（藍球）在網另一側的位置：左右兩點靠近邊線
+const BALL_X = { L: 0.12, C: 0.5, R: 0.88 };
 const toPx = (x) => x * 100;
 const toPy = (y) => 30 + y * 100;
 const STORAGE_KEY = "volley-squad-v1";
-const STORAGE_V = 5; // 每次改變存檔結構就 +1，並在 MIGRATIONS 補一步
+const STORAGE_V = 8; // 每次改變存檔結構就 +1，並在 MIGRATIONS 補一步
 
 /* ---- 存檔位置 ----------------------------------------------------------
    Claude 內建環境有 window.storage（每位使用者各自一份，預設 shared=false）。
@@ -211,18 +231,50 @@ const store = {
    新增結構改動時：STORAGE_V += 1，並在此加上 MIGRATIONS[舊版號]。
    ---------------------------------------------------------------------- */
 const MIGRATIONS = {
-  // 範例（下次改結構時照這個形狀補）：
-  // 5: (d) => ({ ...d, 新欄位: 預設值 }),
+  // v5 → v6：原本單一名單，改成可以有多個團隊
+  5: (d) => ({
+    anchors: d.anchors,
+    roleMap: d.roleMap,
+    activeId: null,
+    teams: (d.roster && d.roster.length)
+      ? [{ id: "t-legacy", name: "我的隊伍", roster: d.roster, court: d.court || [null, null, null, null, null, null] }]
+      : [],
+  }),
+  // v6 → v7：接發拆成 4 人／5 人兩套，並記住目前用哪一套
+  6: (d) => ({
+    ...d,
+    recvMode: "R5",
+    anchors: d.anchors ? normalizeAnchors(d.anchors) : d.anchors,
+  }),
+  // v7 → v8：前排規則改成「有背時 舉→中、背→右」，
+  // 舊存檔的砲背座標仍是「FC＝背、FR＝舉」的年代，把中／右對調回來
+  7: (d) => {
+    const def = d.anchors && d.anchors.def;
+    if (!def || !def.A) return { ...d };
+    const A = {};
+    ["L", "C", "R"].forEach((k) => {
+      const s = def.A[k];
+      A[k] = s ? { ...s, FC: s.FR, FR: s.FC } : s;
+    });
+    return { ...d, anchors: { ...d.anchors, def: { ...def, A } } };
+  },
+  // 下次改結構時照這個形狀往下加：
+  // 8: (d) => ({ ...d, 新欄位: 預設值 }),
 };
 
 // 只收正規點位，順手丟掉早期版本殘留的鍵（例如已廢除的 FA）
 function normalizeAnchors(raw) {
-  const out = { recv: {}, def: { M: {}, A: {} } };
-  ["P2", "P3", "P4"].forEach((k) => {
-    const base = DEFAULT_ANCHORS.recv[k];
-    const src = (raw && raw.recv && raw.recv[k]) || {};
-    out.recv[k] = {};
-    Object.keys(base).forEach((pt) => { out.recv[k][pt] = src[pt] || base[pt]; });
+  const out = { recv: { R5: {}, R4: {} }, def: { M: {}, A: {} } };
+  const rawRecv = (raw && raw.recv) || {};
+  const flatRecv = !!rawRecv.P2; // 舊格式：recv 直接是 {P2,P3,P4}
+  ["R5", "R4"].forEach((m) => {
+    out.recv[m] = {};
+    ["P2", "P3", "P4"].forEach((k) => {
+      const base = DEFAULT_ANCHORS.recv[m][k];
+      const src = (flatRecv ? rawRecv[k] : (rawRecv[m] || {})[k]) || {};
+      out.recv[m][k] = {};
+      Object.keys(base).forEach((pt) => { out.recv[m][k][pt] = src[pt] || base[pt]; });
+    });
   });
   const rawDef = (raw && raw.def) || {};
   const flat = rawDef.L && rawDef.L.FL; // 舊格式：def 直接是 {L,C,R}
@@ -238,12 +290,13 @@ function normalizeAnchors(raw) {
 // 無版本號的舊存檔 → 目前結構
 function fromLegacy(d) {
   return {
-    v: STORAGE_V,
+    v: 5,
     roster: (d.roster || []).map((e) => ({
       id: e.id, name: e.name || "", role: e.role || "", libero: !!e.libero,
       // 早期的 back / pins / pinId / special 規則已由 roleMap 取代，不保留
     })),
     court: d.court,
+    // 注意：fromLegacy 產出的是 v5 結構，接著會被 MIGRATIONS[5] 轉成團隊制
     anchors: d.anchors ? normalizeAnchors(d.anchors) : null,
     roleMap: d.roleMap ? { ...DEFAULT_ROLE_MAP, ...d.roleMap } : null,
   };
@@ -261,7 +314,7 @@ function upgradeSave(raw) {
   return d.v > STORAGE_V ? null : d;
 }
 
-function Court({ spots, ball, size = 96, svgRef, onDown, labels, flag }) {
+function Court({ spots, ball, size = 96, svgRef, onDown, labels, flag, byRole }) {
   const r = size > 150 ? 7 : 9;
   return (
     <svg ref={svgRef} viewBox={`0 0 100 ${VB_H}`} width={size} height={(size * VB_H) / 100}
@@ -272,10 +325,12 @@ function Court({ spots, ball, size = 96, svgRef, onDown, labels, flag }) {
       <line x1="0" y1="63" x2="100" y2="63" stroke={C.line} strokeWidth="0.9" opacity="0.8" />
       <rect x="1" y="1" width="98" height="128" rx="3" fill="none" stroke={flag ? C.warn : C.line}
         strokeWidth={flag ? 2.2 : 0.9} opacity={flag ? 1 : 0.7} />
-      {ball && <circle cx={toPx({ L: 0.22, C: 0.5, R: 0.78 }[ball])} cy="14" r="4.5" fill={C.blue} />}
+      {ball && <circle cx={toPx(BALL_X[ball])} cy="14" r="4.5" fill={C.blue} />}
       {spots.map((s, i) => {
         const isFrontSetter = s.e && s.e.role === "舉球" && FRONT.includes(s.pos);
-        const label = labels ? (s.label || s.key) : s.lib ? "L" : s.e.name;
+        const label = labels
+          ? (s.label || s.key)
+          : s.lib ? "L" : byRole ? (ROLE_ABBR[s.e.role] || "？") : s.e.name;
         return (
           <g key={s.key || (s.e && s.e.id) || i}
             onPointerDown={onDown ? (ev) => onDown(ev, s.key) : undefined}
@@ -301,7 +356,48 @@ const ZONES = [
   { p: 5, x: 21, y: 62 }, { p: 6, x: 50, y: 62 }, { p: 1, x: 79, y: 62 },
 ];
 
-function CourtEditor({ zoneEntry, selZone, onTap }) {
+function CourtEditor({ zoneEntry, selZone, onTap, onSwap, zoneRole }) {
+  const wrapRef = useRef(null);
+  const dragRef = useRef(null);
+  const [dragFrom, setDragFrom] = useState(null);
+  const [dropOn, setDropOn] = useState(null);
+
+  // 指標落在哪一個號位上（同一套 ZONES 座標，取最近且在半徑內的）
+  const zoneAt = (cx, cy) => {
+    const r = wrapRef.current && wrapRef.current.getBoundingClientRect();
+    if (!r) return null;
+    const px = ((cx - r.left) / r.width) * 100;
+    const py = ((cy - r.top) / r.height) * 96;
+    let best = null, bestD = Infinity;
+    ZONES.forEach((z) => {
+      const d = (px - z.x) ** 2 + (py - z.y) ** 2;
+      if (d < bestD) { bestD = d; best = z.p; }
+    });
+    return bestD <= 13 * 13 ? best : null;
+  };
+  const downZone = (ev, p) => {
+    ev.stopPropagation();
+    dragRef.current = { zone: p, x0: ev.clientX, y0: ev.clientY, moved: false };
+    if (ev.currentTarget.setPointerCapture) ev.currentTarget.setPointerCapture(ev.pointerId);
+  };
+  const moveZone = (ev) => {
+    const d = dragRef.current;
+    if (!d) return;
+    if (!d.moved && Math.hypot(ev.clientX - d.x0, ev.clientY - d.y0) < 8) return; // 手抖不算拖曳
+    if (!d.moved) { d.moved = true; setDragFrom(d.zone); }
+    setDropOn(zoneAt(ev.clientX, ev.clientY));
+  };
+  const upZone = (ev) => {
+    const d = dragRef.current;
+    dragRef.current = null;
+    setDragFrom(null);
+    setDropOn(null);
+    if (!d) return;
+    if (!d.moved) { onTap(selZone === d.zone ? null : d.zone); return; } // 純點擊
+    const t = zoneAt(ev.clientX, ev.clientY);
+    if (t && t !== d.zone) onSwap(d.zone, t);
+  };
+
   const arrow = (x1, y1, x2, y2) => {
     const ang = Math.atan2(y2 - y1, x2 - x1);
     const ax = x2 - 2.6 * Math.cos(ang), ay = y2 - 2.6 * Math.sin(ang);
@@ -315,7 +411,7 @@ function CourtEditor({ zoneEntry, selZone, onTap }) {
     );
   };
   return (
-    <div style={{ position: "relative", width: "100%", maxWidth: 340, margin: "10px auto 0", aspectRatio: "100/96" }}>
+    <div ref={wrapRef} style={{ position: "relative", width: "100%", maxWidth: 340, margin: "10px auto 0", aspectRatio: "100/96" }}>
       <svg viewBox="0 0 100 96" style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}>
         <rect x="5" y="8" width="90" height="72" rx="2.5" fill={C.court} opacity="0.55" />
         <line x1="2" y1="8" x2="98" y2="8" stroke={C.ink} strokeWidth="1.6" />
@@ -343,17 +439,24 @@ function CourtEditor({ zoneEntry, selZone, onTap }) {
         const isFrontSetter = e && e.role === "舉球" && [2, 3, 4].includes(z.p);
         return (
           <button key={z.p}
-            onClick={(ev) => { ev.stopPropagation(); onTap(selected ? null : z.p); }}
+            onPointerDown={(ev) => downZone(ev, z.p)}
+            onPointerMove={moveZone}
+            onPointerUp={upZone}
+            onPointerCancel={upZone}
+            onClick={(ev) => ev.stopPropagation()}
             style={{
               position: "absolute", left: `${z.x}%`, top: `${(z.y / 96) * 100}%`,
-              transform: "translate(-50%,-50%)", width: "21.5%", aspectRatio: "1",
-              borderRadius: "50%", cursor: "pointer",
+              transform: `translate(-50%,-50%) scale(${dropOn === z.p && dragFrom !== z.p ? 1.12 : 1})`,
+              width: "21.5%", aspectRatio: "1", touchAction: "none",
+              borderRadius: "50%", cursor: dragFrom ? "grabbing" : "grab",
+              opacity: dragFrom === z.p ? 0.45 : 1,
               background: selected ? C.ink : C.panel,
               color: selected ? C.paper : C.ink,
-              border: `2px solid ${isFrontSetter ? C.red : selected ? C.ink : C.edge}`,
+              border: `2px solid ${dropOn === z.p && dragFrom !== z.p ? C.blue : isFrontSetter ? C.red : selected ? C.ink : C.edge}`,
               boxShadow: "0 1px 3px rgba(34,29,23,0.18)",
               display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
               padding: 0, fontFamily: FONT, lineHeight: 1.15,
+              transition: "transform 90ms, opacity 90ms",
             }}>
             <span style={{
               position: "absolute", top: "-6%", left: "-6%", width: 18, height: 18, borderRadius: "50%",
@@ -367,8 +470,12 @@ function CourtEditor({ zoneEntry, selZone, onTap }) {
                 display: "flex", alignItems: "center", justifyContent: "center",
               }}>L</span>
             )}
-            <span style={{ fontSize: 16, fontWeight: 800 }}>{e ? e.name || "？" : "？"}</span>
-            <span style={{ fontSize: 9.5, opacity: 0.72 }}>{e ? e.role || "未定" : ""}</span>
+            <span style={{ fontSize: 16, fontWeight: 800, opacity: e ? 1 : 0.35 }}>
+              {e ? e.name || "？" : "＋"}
+            </span>
+            <span style={{ fontSize: 9.5, opacity: e ? 0.72 : 0.5 }}>
+              {e ? e.role || "未定" : zoneRole(z.p) || ""}
+            </span>
           </button>
         );
       })}
@@ -376,35 +483,60 @@ function CourtEditor({ zoneEntry, selZone, onTap }) {
   );
 }
 
-const ROSTER0 = [
-  { id: "m1", name: "利", role: "大砲" },
-  { id: "m2", name: "草", role: "舉球" },
-  { id: "m3", name: "怡", role: "攔中" },
-  { id: "m4", name: "宜", role: "大砲" },
-  { id: "m5", name: "宋", role: "舉球" },
-  { id: "m6", name: "溫", role: "攔中" },
-  { id: "m7", name: "黃", role: "" },
-];
-const COURT0 = ["m1", "m2", "m3", "m4", "m5", "m6"];
+const EMPTY_COURT = [null, null, null, null, null, null];
+// 一鍵套用的位置順序，依號位 1→6（對角自動成立：1↔4、2↔5、3↔6）
+const PRESETS = {
+  砲中: ["舉球", "大砲", "攔中", "舉球", "大砲", "攔中"],
+  砲背: ["舉球", "副攻", "大砲", "舉球", "副攻", "大砲"],
+};
+const uid = (p) => p + Math.random().toString(36).slice(2, 8);
+const newTeam = (name) => ({ id: uid("t"), name, roster: [], court: [...EMPTY_COURT], mode: null });
 // 後排依位置固定防守位置（可改；設為 null 即不套用）
 const DEFAULT_ROLE_MAP = { 攔中: "L", 副攻: "L", 大砲: "C", 舉球: "R", 自由: null };
 
 export default function RotationBoard() {
-  const [roster, setRoster] = useState(ROSTER0);
-  const [court, setCourt] = useState(COURT0);
+  const [teams, setTeams] = useState([]);
+  const [activeId, setActiveId] = useState(null);
+  const [newName, setNewName] = useState("");
+  const [renaming, setRenaming] = useState(null);
   const [anchors, setAnchors] = useState(DEFAULT_ANCHORS);
   const [roleMap, setRoleMap] = useState(DEFAULT_ROLE_MAP);
+  const [recvMode, setRecvMode] = useState("R5");
   const [tab, setTab] = useState("setup");
   const [selZone, setSelZone] = useState(null);
   const [rosterOpen, setRosterOpen] = useState(true);
   const [saveState, setSaveState] = useState("");
   const [zoom, setZoom] = useState(null);
-  const [printHint, setPrintHint] = useState(false);
+  const [pngUrl, setPngUrl] = useState(null);
+  const [pngBusy, setPngBusy] = useState(false);
+  const [showRole, setShowRole] = useState(false);
 
-  const [editKey, setEditKey] = useState("recv.P2");
+  const [editKey, setEditKey] = useState("recv.R5.P2");
   const [drag, setDrag] = useState(null);
   const svgRef = useRef(null);
-  const idRef = useRef(8);
+
+  // 目前團隊的名單／場上陣容；setRoster / setCourt 只改到這一隊
+  const team = teams.find((t) => t.id === activeId) || null;
+  const roster = team ? team.roster : [];
+  const court = team ? team.court : EMPTY_COURT;
+  const patchTeam = (fn) => setTeams((T) => T.map((t) => (t.id === activeId ? fn(t) : t)));
+  const setRoster = (u) => patchTeam((t) => ({ ...t, roster: typeof u === "function" ? u(t.roster) : u }));
+  const setCourt = (u) => patchTeam((t) => ({ ...t, court: typeof u === "function" ? u(t.court) : u }));
+
+  const addTeam = () => {
+    const n = newName.trim();
+    if (!n) return;
+    const t = newTeam(n);
+    setTeams((T) => [...T, t]);
+    setActiveId(t.id);
+    setNewName("");
+    setTab("setup");
+  };
+  const renameTeam = (id, name) => setTeams((T) => T.map((t) => (t.id === id ? { ...t, name } : t)));
+  const removeTeam = (id) => {
+    setTeams((T) => T.filter((t) => t.id !== id));
+    if (activeId === id) setActiveId(null);
+  };
   const readyRef = useRef(false); // 初始載入完成前不啟動自動儲存，避免用預設值蓋掉存檔
 
   /* ---- 儲存／載入（跨工作階段保存） ---- */
@@ -415,14 +547,11 @@ export default function RotationBoard() {
         if (res && res.value) {
           const d = upgradeSave(res.value);
           if (!d) { readyRef.current = false; return; } // 存檔比程式新，保持原狀不覆寫
-          if (Array.isArray(d.roster) && d.roster.length) {
-            setRoster(d.roster);
-            const nums = d.roster.map((e) => parseInt(String(e.id).replace(/\D/g, ""), 10)).filter(Number.isFinite);
-            if (nums.length) idRef.current = Math.max(...nums) + 1;
-          }
-          if (Array.isArray(d.court) && d.court.length === 6) setCourt(d.court);
-          if (d.anchors) setAnchors(d.anchors);
+          if (Array.isArray(d.teams)) setTeams(d.teams);
+          if (d.activeId) setActiveId(d.activeId);
+          if (d.anchors && d.anchors.recv && d.anchors.def) setAnchors(normalizeAnchors(d.anchors));
           if (d.roleMap) setRoleMap(d.roleMap);
+          if (d.recvMode) setRecvMode(d.recvMode);
         }
       } catch { /* 尚未儲存過，用預設值 */ }
       readyRef.current = true;
@@ -433,23 +562,22 @@ export default function RotationBoard() {
     if (!readyRef.current) return;
     const t = setTimeout(() => {
       try {
-        store.set(STORAGE_KEY, JSON.stringify({ v: STORAGE_V, roster, court, anchors, roleMap })).catch(() => {});
+        store.set(STORAGE_KEY, JSON.stringify({ v: STORAGE_V, teams, activeId, anchors, roleMap, recvMode })).catch(() => {});
       } catch { /* 儲存失敗不影響操作 */ }
     }, 900);
     return () => clearTimeout(t);
-  }, [roster, court, anchors, roleMap]);
+  }, [teams, activeId, anchors, roleMap, recvMode]);
   const save = async () => {
     setSaveState("saving");
     try {
-      const r = await store.set(STORAGE_KEY, JSON.stringify({ v: STORAGE_V, roster, court, anchors, roleMap }));
+      const r = await store.set(STORAGE_KEY, JSON.stringify({ v: STORAGE_V, teams, activeId, anchors, roleMap, recvMode }));
       setSaveState(r ? "saved" : "error");
     } catch { setSaveState("error"); }
     setTimeout(() => setSaveState(""), 1800);
   };
   const clearSaved = async () => {
     try { await store.remove(STORAGE_KEY); } catch { /* 沒有存檔 */ }
-    setRoster(ROSTER0); setCourt(COURT0); setAnchors(DEFAULT_ANCHORS); setRoleMap(DEFAULT_ROLE_MAP);
-    idRef.current = 8;
+    setTeams([]); setActiveId(null); setAnchors(DEFAULT_ANCHORS); setRoleMap(DEFAULT_ROLE_MAP); setRecvMode("R5");
   };
 
   const byId = useMemo(() => Object.fromEntries(roster.map((e) => [e.id, e])), [roster]);
@@ -466,7 +594,7 @@ export default function RotationBoard() {
       if (bad.length) out.push(`R${r + 1} 接發：${bad[0]}`);
     }
     return out;
-  }, [lineup, anchors]);
+  }, [lineup, anchors, recvMode]);
 
   const clashes = useMemo(() => backConflicts(lineup, roleMap), [lineup, roleMap]);
 
@@ -474,19 +602,44 @@ export default function RotationBoard() {
     setRoster((R) => R.map((e) => (e.id === id ? { ...e, ...patch } : e)));
   const addMember = () => {
     if (roster.length >= 20) return;
-    setRoster((R) => [...R, { id: "m" + idRef.current++, name: "", role: "" }]);
+    setRoster((R) => [...R, { id: uid("m"), name: "", role: "" }]);
   };
   const removeMember = (id) => {
     if (zoneOf(id)) return;
     setRoster((R) => R.filter((e) => e.id !== id));
   };
-  const assign = (p, id) =>
-    setCourt((cur) => {
+  // 拖曳交換兩個號位（含空位）
+  const swapZones = (a, b) =>
+    setCourtSynced((cur) => {
       const n = [...cur];
+      [n[a - 1], n[b - 1]] = [n[b - 1], n[a - 1]];
+      return n;
+    });
+  const assign = (p, id) =>
+    setCourtSynced((cur) => {
+      const n = [...cur];
+      if (id === null) { n[p - 1] = null; return n; } // 清空此位
       const from = n.indexOf(id);
-      if (from >= 0) n[from] = n[p - 1];
+      if (from >= 0) n[from] = n[p - 1]; // 已在場上＝兩人互換
       n[p - 1] = id;
       return n;
+    });
+  // 套用模式：場上六格依號位填好位置，名字清空等待重填（板凳球員不動）
+  // 按模式：只清空場上陣容，隊員名單原封不動；之後填進哪個號位就套用該號位的位置
+  const applyPreset = (key) =>
+    patchTeam((t) => ({ ...t, mode: key, court: [...EMPTY_COURT] }));
+  const zoneRole = (p) => (team && team.mode ? PRESETS[team.mode][p - 1] : null);
+  // 改動場上陣容時，若有模式就把位置同步成該號位應有的角色
+  const setCourtSynced = (fn) =>
+    patchTeam((t) => {
+      const nextCourt = fn(t.court);
+      const seq = t.mode && PRESETS[t.mode];
+      if (!seq) return { ...t, court: nextCourt };
+      const roster = t.roster.map((e) => {
+        const z = nextCourt.indexOf(e.id);
+        return z >= 0 ? { ...e, role: seq[z] } : e;
+      });
+      return { ...t, court: nextCourt, roster };
     });
   const rotateOne = () => setCourt((cur) => [...cur.slice(1), cur[0]]);
   const rotateBack = () => setCourt((cur) => [cur[5], ...cur.slice(0, 5)]);
@@ -495,11 +648,152 @@ export default function RotationBoard() {
     setRoster((R) => R.map((e) => (e.libero ? { ...e, libero: false } : e)));
     setRoleMap({ 舉球: null, 大砲: null, 副攻: null, 攔中: null, 自由: null });
   };
+  const switchRecvMode = (m) => {
+    setRecvMode(m);
+    setEditKey((k) => (k.startsWith("recv.") ? k.replace(/^recv\.(R4|R5)\./, `recv.${m}.`) : k));
+  };
   const setRoleSlot = (role, k) =>
     setRoleMap((M) => ({ ...M, [role]: M[role] === k ? null : k }));
-  const exportPdf = () => {
-    setPrintHint(true);
-    setTimeout(() => { try { window.print(); } catch { /* 提示文字引導手動列印 */ } }, 120);
+  /* ---- 輸出 PNG --------------------------------------------------------
+     直接用 Canvas 2D 逐格重畫整張輪轉表，不經過 SVG→圖片那條路——
+     那條路在轉檔時載不到網頁字型，中文會變成方框。Canvas 的 fillText
+     走瀏覽器自己的字型堆疊，中文正常。
+     產生後顯示在彈窗裡：桌機按下載，手機長按圖片即可存到相簿。
+     -------------------------------------------------------------------- */
+  const exportPng = () => {
+    setPngBusy(true);
+    setTimeout(() => {
+      try {
+        const S = 2.6; // 解析度倍率
+        const PAD = 18, LABEL_W = 92, CW = 100, CH = 148, GAP = 26, ROWGAP = 10, HEAD = 52;
+        const W = PAD * 2 + LABEL_W + CW * SCENES.length + GAP;
+        const H = PAD * 2 + HEAD + (CH + ROWGAP) * 6;
+        const cv = document.createElement("canvas");
+        cv.width = Math.round(W * S);
+        cv.height = Math.round(H * S);
+        const ctx = cv.getContext("2d");
+        ctx.scale(S, S);
+        ctx.fillStyle = C.paper;
+        ctx.fillRect(0, 0, W, H);
+        ctx.textBaseline = "alphabetic";
+
+        const rr = (x, y, w, h, r) => {
+          ctx.beginPath();
+          if (ctx.roundRect) ctx.roundRect(x, y, w, h, r);
+          else ctx.rect(x, y, w, h);
+        };
+        const txt = (str, x, y, o = {}) => {
+          const { size = 10, weight = 600, color = C.ink, align = "center" } = o;
+          ctx.font = `${weight} ${size}px ${FONT}`;
+          ctx.fillStyle = color;
+          ctx.textAlign = align;
+          ctx.fillText(str, x, y);
+        };
+        const hline = (x1, y, x2, color, w, alpha = 1) => {
+          ctx.save();
+          ctx.globalAlpha = alpha;
+          ctx.strokeStyle = color;
+          ctx.lineWidth = w;
+          ctx.beginPath();
+          ctx.moveTo(x1, y);
+          ctx.lineTo(x2, y);
+          ctx.stroke();
+          ctx.restore();
+        };
+
+        const drawCourt = (ox, oy, spots, ball, flag) => {
+          ctx.fillStyle = C.court;
+          rr(ox, oy, CW, 130, 4);
+          ctx.fill();
+          ctx.save();
+          ctx.globalAlpha = 0.45;
+          ctx.fillStyle = C.courtDeep;
+          ctx.fillRect(ox, oy, CW, 30);
+          ctx.restore();
+          hline(ox, oy + 30, ox + CW, C.line, 1.6);
+          hline(ox, oy + 63, ox + CW, C.line, 0.9, 0.8);
+          ctx.save();
+          ctx.globalAlpha = flag ? 1 : 0.7;
+          ctx.strokeStyle = flag ? C.warn : C.line;
+          ctx.lineWidth = flag ? 2.2 : 0.9;
+          rr(ox + 1, oy + 1, CW - 2, 128, 3);
+          ctx.stroke();
+          ctx.restore();
+          if (ball) {
+            ctx.fillStyle = C.blue;
+            ctx.beginPath();
+            ctx.arc(ox + BALL_X[ball] * 100, oy + 14, 4.5, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          spots.forEach((sp) => {
+            const cx = ox + sp.xy[0] * 100;
+            const cy = oy + 30 + sp.xy[1] * 100;
+            const frontSetter = sp.e.role === "舉球" && FRONT.includes(sp.pos);
+            ctx.beginPath();
+            ctx.arc(cx, cy, 9, 0, Math.PI * 2);
+            if (frontSetter) {
+              ctx.strokeStyle = C.red;
+              ctx.lineWidth = 1.4;
+              ctx.stroke();
+            } else {
+              ctx.fillStyle = sp.lib ? C.ink : C.court;
+              ctx.fill();
+            }
+            const lab = sp.lib ? "L" : showRole ? ROLE_ABBR[sp.e.role] || "？" : sp.e.name || "？";
+            txt(lab, cx, cy + 3.4, {
+              size: 10, weight: sp.lib ? 800 : 600, color: sp.lib ? C.paper : C.ink,
+            });
+          });
+        };
+
+        const colX = (i) => PAD + LABEL_W + CW * i + (i >= 2 ? GAP : 0);
+
+        txt("雙舉輪轉表", PAD, PAD + 15, { size: 15, weight: 800, align: "left" });
+        const gy = PAD + HEAD - 20;
+        txt("發球權", colX(0) + CW, gy, { size: 9.5, color: C.muted });
+        txt("對方進攻", colX(2) + CW * 1.5, gy, { size: 9.5, color: C.muted });
+        hline(colX(0), gy + 4, colX(0) + CW * 2, C.edge, 1);
+        hline(colX(2), gy + 4, colX(2) + CW * 3, C.edge, 1);
+        SCENES.forEach((sc, i) => {
+          const lb = sc.id === "recv" ? `接發（${recvMode === "R4" ? "4" : "5"}人）` : sc.label;
+          txt(lb, colX(i) + CW / 2, PAD + HEAD - 4, { size: 10.5, weight: 700, color: C.muted });
+        });
+
+        for (let r = 0; r < 6; r++) {
+          const oy = PAD + HEAD + (CH + ROWGAP) * r;
+          txt(`R${r + 1}`, PAD, oy + 12, { size: 11, weight: 700, color: C.muted, align: "left" });
+          const occ = occupancy(lineup, r);
+          [...FRONT, ...BACK].forEach((pz, n) => {
+            const e = occ[pz];
+            txt(e ? (showRole ? ROLE_ABBR[e.role] || "？" : e.name || "？") : "？",
+              PAD + 14 + (n % 3) * 26, oy + 32 + Math.floor(n / 3) * 20,
+              { size: 14, weight: 800 });
+          });
+          SCENES.forEach((sc, i) => {
+            const fm = formation(lineup, r, sc.id, anchors, roleMap, recvMode);
+            const ox = colX(i);
+            if (!fm.ok) {
+              ctx.save();
+              ctx.strokeStyle = C.warn;
+              ctx.setLineDash([3, 3]);
+              ctx.lineWidth = 1.5;
+              rr(ox + 2, oy, CW - 4, 130, 6);
+              ctx.stroke();
+              ctx.restore();
+              txt("無法解析", ox + CW / 2, oy + 62, { size: 10, color: C.warn });
+              txt(fm.reason, ox + CW / 2, oy + 76, { size: 10, color: C.warn });
+              return;
+            }
+            drawCourt(ox, oy, fm.spots, sc.ball && DEF_MAP[sc.id], false); // 分享用的圖不標紅框
+          });
+        }
+
+        setPngUrl(cv.toDataURL("image/png"));
+      } catch {
+        setPngUrl("error");
+      }
+      setPngBusy(false);
+    }, 30);
   };
   // 場上同位置（恰好兩人）的配對，供一鍵互換
   const sameRolePairs = useMemo(() => {
@@ -520,9 +814,9 @@ export default function RotationBoard() {
     });
 
   const EDIT_SETS = [
-    { key: "recv.P2", label: "舉球在2號位", get: (A) => A.recv.P2, ball: null },
-    { key: "recv.P3", label: "舉球在3號位", get: (A) => A.recv.P3, ball: null },
-    { key: "recv.P4", label: "舉球在4號位", get: (A) => A.recv.P4, ball: null },
+    { key: `recv.${recvMode}.P2`, label: "舉球在2號位", get: (A) => (A.recv[recvMode] || A.recv.R5).P2, ball: null },
+    { key: `recv.${recvMode}.P3`, label: "舉球在3號位", get: (A) => (A.recv[recvMode] || A.recv.R5).P3, ball: null },
+    { key: `recv.${recvMode}.P4`, label: "舉球在4號位", get: (A) => (A.recv[recvMode] || A.recv.R5).P4, ball: null },
     { key: "def.A.L", label: "左邊攻擊", get: (A) => A.def.A.L, ball: "L" },
     { key: "def.A.C", label: "中間攻擊", get: (A) => A.def.A.C, ball: "C" },
     { key: "def.A.R", label: "右邊攻擊", get: (A) => A.def.A.R, ball: "R" },
@@ -530,11 +824,15 @@ export default function RotationBoard() {
     { key: "def.M.C", label: "中間攻擊", get: (A) => A.def.M.C, ball: "C" },
     { key: "def.M.R", label: "右邊攻擊", get: (A) => A.def.M.R, ball: "R" },
   ];
-  const cur = EDIT_SETS.find((s) => s.key === editKey);
-  const curSet = cur.get(anchors);
-  const midLabel = editKey.startsWith("def.A") ? "背" : "中";
-  const ANCHOR_LABEL = { FL: "砲", FC: midLabel, FR: "舉", BL: "後排", BC: "後排", BR: "後排" };
-  const VALID_KEYS = editKey.startsWith("recv")
+  const cur = EDIT_SETS.find((s) => s.key === editKey) || EDIT_SETS[0];
+  const curKey = cur.key; // editKey 可能過期，實際生效的是這個
+  const curSet = cur.get(anchors) || {};
+  const isBackVar = curKey.startsWith("def.A"); // 砲背那套
+  const ANCHOR_LABEL = {
+    FL: "砲", FC: isBackVar ? "舉" : "中", FR: isBackVar ? "背" : "舉",
+    BL: "後排", BC: "後排", BR: "後排",
+  };
+  const VALID_KEYS = curKey.startsWith("recv")
     ? ["1", "2", "3", "4", "5", "6"]
     : ["FL", "FC", "FR", "BL", "BC", "BR"];
   const editSpots = VALID_KEYS.filter((k) => curSet[k]).map((k) => ({
@@ -544,7 +842,7 @@ export default function RotationBoard() {
     setAnchors((A) => {
       const next = JSON.parse(JSON.stringify(A));
       let node = next;
-      editKey.split(".").forEach((seg) => { node = node[seg]; });
+      curKey.split(".").forEach((seg) => { node = node[seg]; });
       node[k] = xy;
       return next;
     });
@@ -571,6 +869,7 @@ export default function RotationBoard() {
   };
 
   const selEntry = selZone ? zoneEntry(selZone) : null;
+  const selOpen = !!selZone;
 
   return (
     <div onClick={() => setSelZone(null)}
@@ -589,21 +888,92 @@ export default function RotationBoard() {
       <div className="flex items-baseline justify-between mb-2 no-print">
         <div>
           <div style={{ fontSize: 19, fontWeight: 800 }}>雙舉輪轉板</div>
-          <div style={{ fontSize: 11, color: C.muted, fontFamily: MONO, letterSpacing: "0.08em" }}>
-            ROSTER → LINEUP → 30 FORMATIONS
+          <div style={{ fontSize: 11, color: C.muted }}>
+            {team ? team.name : "尚未選擇團隊"}
           </div>
         </div>
-        <div className="flex gap-1 flex-wrap justify-end">
-          {[["setup", "① 名單"], ["sheet", "② 全圖"], ["anchor", "③ 定點"]].map(([k, l]) => (
-            <button key={k} onClick={() => setTab(k)}
-              style={{ ...btn, background: tab === k ? C.ink : C.panel, color: tab === k ? C.paper : C.ink }}>
-              {l}
-            </button>
-          ))}
-        </div>
+        {team && (
+          <div className="flex gap-1 flex-wrap justify-end">
+            <button onClick={() => { setActiveId(null); setSelZone(null); }} style={btn}>切換團隊</button>
+            {[["setup", "① 名單"], ["sheet", "② 全圖"], ["anchor", "③ 定點"]].map(([k, l]) => (
+              <button key={k} onClick={() => setTab(k)}
+                style={{ ...btn, background: tab === k ? C.ink : C.panel, color: tab === k ? C.paper : C.ink }}>
+                {l}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
-      {clashes.length > 0 && (
+      {/* 團隊選擇：沒有選定團隊時就只有這一頁 */}
+      {!team && (
+        <div style={card}>
+          <div style={{ fontSize: 14, fontWeight: 800, borderBottom: `2px solid ${C.ink}`, display: "inline-block", paddingBottom: 2 }}>
+            選擇團隊
+          </div>
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 6, marginBottom: 10 }}>
+            每個團隊有自己的隊員名單與輪轉順序；定點與後排防守位置全部團隊共用。點兩下團隊名稱可改名。
+          </div>
+
+          {teams.length === 0 && (
+            <div style={{
+              fontSize: 12, color: C.muted, padding: "14px 10px", marginBottom: 10,
+              border: `1px dashed ${C.edge}`, borderRadius: 8, textAlign: "center",
+            }}>
+              還沒有任何團隊，先在下面建立一個
+            </div>
+          )}
+
+          {teams.map((t) => (
+            <div key={t.id} className="flex items-center gap-2 mb-1"
+              style={{ padding: "8px 10px", border: `1px solid ${C.edge}`, borderRadius: 8, background: "#fff" }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                {renaming === t.id ? (
+                  <input value={t.name} autoFocus
+                    onChange={(ev) => renameTeam(t.id, ev.target.value)}
+                    onBlur={() => setRenaming(null)}
+                    onKeyDown={(ev) => (ev.key === "Enter" || ev.key === "Escape") && setRenaming(null)}
+                    placeholder="團隊名稱"
+                    style={{
+                      width: "100%", fontFamily: FONT, fontSize: 14, fontWeight: 800, color: C.ink,
+                      padding: "1px 3px", marginLeft: -4, borderRadius: 5,
+                      border: `1px solid ${C.ink}`, background: "#fff",
+                    }} />
+                ) : (
+                  <div onDoubleClick={() => setRenaming(t.id)}
+                    style={{ fontSize: 14, fontWeight: 800, cursor: "text" }}>
+                    {t.name || "未命名"}
+                  </div>
+                )}
+                <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>
+                  {t.roster.length} 名隊員・場上 {t.court.filter(Boolean).length}/6
+                </div>
+              </div>
+              <button onClick={() => { setActiveId(t.id); setTab("setup"); setSelZone(null); }}
+                style={{ ...btn, background: C.ink, color: C.paper, fontWeight: 700 }}>
+                進入
+              </button>
+              <button onClick={() => removeTeam(t.id)} style={{ ...btn, color: C.warn }}>刪</button>
+            </div>
+          ))}
+
+          <div className="flex gap-1 mt-3">
+            <input value={newName} onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && addTeam()}
+              placeholder="團隊名稱"
+              style={{
+                flex: 1, fontFamily: FONT, fontSize: 13, padding: "8px 10px",
+                borderRadius: 8, border: `1px solid ${C.edge}`, background: "#fff", color: C.ink,
+              }} />
+            <button onClick={addTeam} disabled={!newName.trim()}
+              style={{ ...btn, fontWeight: 700, opacity: newName.trim() ? 1 : 0.4 }}>
+              ＋ 建立團隊
+            </button>
+          </div>
+        </div>
+      )}
+
+      {team && clashes.length > 0 && (
         <div className="no-print" style={{ ...card, borderColor: C.blue, marginBottom: 8, padding: 9 }}>
           <div style={{ fontSize: 12, color: C.blue, fontWeight: 700 }}>
             後排規則撞格 {clashes.length} 處
@@ -615,7 +985,7 @@ export default function RotationBoard() {
         </div>
       )}
 
-      {issues.length > 0 && (
+      {team && issues.length > 0 && (
         <div className="no-print" style={{ ...card, borderColor: C.warn, marginBottom: 8, padding: 9 }}>
           <div style={{ fontSize: 12, color: C.warn, fontWeight: 700 }}>
             位置錯誤 {issues.length} 處（接發擊球瞬間重疊）
@@ -625,16 +995,16 @@ export default function RotationBoard() {
       )}
 
       {/* ① 名單 */}
-      {tab === "setup" && (
+      {team && tab === "setup" && (
         <div style={card}>
           <div style={{ fontSize: 14, fontWeight: 800, borderBottom: `2px solid ${C.ink}`, display: "inline-block", paddingBottom: 2 }}>
             輪轉順序
           </div>
-          <span style={{ fontSize: 11, color: C.muted, marginLeft: 8 }}>點場上位置編輯</span>
+          <span style={{ fontSize: 11, color: C.muted, marginLeft: 8 }}>點一下編輯，拖曳可互換位置</span>
 
-          <CourtEditor zoneEntry={zoneEntry} selZone={selZone} onTap={setSelZone} />
+          <CourtEditor zoneEntry={zoneEntry} selZone={selZone} onTap={setSelZone} onSwap={swapZones} zoneRole={zoneRole} />
 
-          {selEntry && (
+          {selOpen && (
             <div onClick={(ev) => ev.stopPropagation()}
               style={{
                 marginTop: 10, padding: 10, borderRadius: 10,
@@ -644,7 +1014,7 @@ export default function RotationBoard() {
                 <div style={{ fontWeight: 800, fontSize: 13 }}>
                   {selZone}號位
                   <span style={{ fontSize: 11, color: C.muted, fontWeight: 400, marginLeft: 6 }}>
-                    {ZONE_NAME[selZone]}・{selEntry.name || "？"}
+                    {ZONE_NAME[selZone]}・{selEntry ? selEntry.name || "？" : "空位"}
                   </span>
                 </div>
                 <button onClick={() => setSelZone(null)} style={{ ...btn, padding: "3px 8px" }}>收合</button>
@@ -652,9 +1022,12 @@ export default function RotationBoard() {
 
               <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>球員</div>
               <div className="flex gap-1 flex-wrap mb-2">
+                {roster.length === 0 && (
+                  <span style={{ fontSize: 11, color: C.muted }}>下方「隊員名單」還沒有人，先新增隊員</span>
+                )}
                 {roster.map((e) => {
                   const z = zoneOf(e.id);
-                  const isHere = e.id === selEntry.id;
+                  const isHere = selEntry && e.id === selEntry.id;
                   return (
                     <button key={e.id} onClick={() => !isHere && assign(selZone, e.id)}
                       style={{
@@ -670,8 +1043,13 @@ export default function RotationBoard() {
                     </button>
                   );
                 })}
+                {selEntry && (
+                  <button onClick={() => assign(selZone, null)}
+                    style={{ ...btn, padding: "5px 9px", color: C.warn }}>清空此位</button>
+                )}
               </div>
 
+              {selEntry && (<>
               <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>位置</div>
               <div className="flex gap-1 flex-wrap mb-2">
                 {ROLE_LIST.map((r) => (
@@ -727,8 +1105,23 @@ export default function RotationBoard() {
                 依位置套用到所有輪次，未指定的位置依基本輪轉順序遞補。
                 「替自由」＝該員輪到後排時由自由球員替上（輪到發球時仍由本人發球）
               </div>
+              </>)}
             </div>
           )}
+
+          <div className="flex items-center gap-1 flex-wrap mt-3">
+            <span style={{ fontSize: 11, color: C.muted }}>模式：</span>
+            {["砲中", "砲背"].map((k) => (
+              <button key={k} onClick={() => applyPreset(k)}
+                style={{
+                  ...btn,
+                  background: team.mode === k ? C.ink : C.panel,
+                  color: team.mode === k ? C.paper : C.ink,
+                }}>
+                {k}
+              </button>
+            ))}
+          </div>
 
           {sameRolePairs.length > 0 && (
             <div className="flex items-center gap-1 flex-wrap mt-3">
@@ -801,7 +1194,17 @@ export default function RotationBoard() {
       )}
 
       {/* ② 全圖 */}
-      {tab === "sheet" && (
+      {team && tab === "sheet" && (
+        <>
+        <div className="flex items-center gap-1 mb-2 no-print">
+          <span style={{ fontSize: 11, color: C.muted }}>顯示：</span>
+          {[["名字", false], ["位置", true]].map(([l, v]) => (
+            <button key={l} onClick={() => setShowRole(v)}
+              style={{ ...btn, background: showRole === v ? C.ink : C.panel, color: showRole === v ? C.paper : C.ink }}>
+              {l}
+            </button>
+          ))}
+        </div>
         <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
           <div className="print-title" style={{ fontSize: 16, fontWeight: 800, marginBottom: 6 }}>雙舉輪轉表</div>
           <div style={{ minWidth: 632 }}>
@@ -815,7 +1218,7 @@ export default function RotationBoard() {
                   width: 100, marginLeft: i === 2 ? SHEET_GAP : 0,
                   fontSize: 11, fontWeight: 700, color: C.muted, textAlign: "center",
                 }}>
-                  {s.label}
+                  {s.id === "recv" ? `接發（${recvMode === "R4" ? "4" : "5"}人）` : s.label}
                 </div>
               ))}
             </div>
@@ -826,12 +1229,13 @@ export default function RotationBoard() {
                   <div className="flex flex-wrap" style={{ marginTop: 2 }}>
                     {[...FRONT, ...BACK].map((p) => {
                       const e = occupancy(lineup, r)[p];
+                      const txt = e ? (showRole ? ROLE_ABBR[e.role] || "？" : e.name || "？") : "？";
                       return (
                         <span key={p} style={{
                           width: "33.3%", fontSize: 14, fontWeight: 800,
                           lineHeight: 1.45, color: C.ink, textAlign: "center",
                         }}>
-                          {e ? e.name || "？" : "？"}
+                          {txt}
                         </span>
                       );
                     })}
@@ -839,7 +1243,7 @@ export default function RotationBoard() {
                 </div>
                 {SCENES.map((s, i) => {
                   const gap = i === 2 ? SHEET_GAP : 0;
-                  const fm = formation(lineup, r, s.id, anchors, roleMap);
+                  const fm = formation(lineup, r, s.id, anchors, roleMap, recvMode);
                   if (!fm.ok)
                     return (
                       <div key={s.id} style={{ width: 100, marginLeft: gap, padding: "0 2px" }}>
@@ -856,7 +1260,7 @@ export default function RotationBoard() {
                   return (
                     <button key={s.id} onClick={() => setZoom({ r, scene: s })}
                       style={{ width: 100, marginLeft: gap, background: "none", border: "none", padding: "0 2px" }}>
-                      <Court spots={fm.spots} ball={s.ball && DEF_MAP[s.id]} size={96}
+                      <Court spots={fm.spots} byRole={showRole} ball={s.ball && DEF_MAP[s.id]} size={96}
                         flag={viol.length > 0} />
                     </button>
                   );
@@ -868,30 +1272,37 @@ export default function RotationBoard() {
             <div style={{ fontSize: 11, color: C.muted, marginBottom: 6 }}>
               紅框＝接發在擊球瞬間有位置錯誤。點小圖放大看細節。
             </div>
-            <button onClick={exportPdf} style={{ ...btn, background: C.ink, color: C.paper, fontWeight: 700 }}>
-              輸出 PDF
+            <button onClick={exportPng} disabled={pngBusy}
+              style={{ ...btn, background: C.ink, color: C.paper, fontWeight: 700, opacity: pngBusy ? 0.5 : 1 }}>
+              {pngBusy ? "產生中…" : "輸出圖片"}
             </button>
-            {printHint && (
-              <span style={{ fontSize: 11, color: C.muted, marginLeft: 8 }}>
-                在列印視窗選「另存為 PDF」；若視窗沒出現，請用瀏覽器選單的「列印」。
-              </span>
-            )}
           </div>
         </div>
+        </>
       )}
 
       {/* 定點 */}
-      {tab === "anchor" && (
+      {team && tab === "anchor" && (
         <div style={card}>
           <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>
             拖動任一個點，全部輪轉同步更新，並自動儲存。六套表就是整個系統的座標來源。
+          </div>
+          <div className="flex items-center gap-1 mb-2">
+            <span style={{ fontSize: 11, color: C.muted, width: 30, flexShrink: 0 }}>人數</span>
+            {[["R4", "4人接發"], ["R5", "5人接發"]].map(([m, l]) => (
+              <button key={m} onClick={() => switchRecvMode(m)}
+                style={{ ...btn, fontSize: 11, padding: "5px 8px", background: recvMode === m ? C.ink : C.panel, color: recvMode === m ? C.paper : C.ink }}>
+                {l}
+              </button>
+            ))}
+            <span style={{ fontSize: 10.5, color: C.muted, marginLeft: 4 }}>全圖也會跟著換</span>
           </div>
           {[["接發", EDIT_SETS.slice(0, 3)], ["砲背", EDIT_SETS.slice(3, 6)], ["砲中", EDIT_SETS.slice(6)]].map(([g, sets]) => (
             <div key={g} className="flex items-center gap-1 mb-2">
               <span style={{ fontSize: 11, color: C.muted, width: 30, flexShrink: 0 }}>{g}</span>
               {sets.map((s) => (
                 <button key={s.key} onClick={() => setEditKey(s.key)}
-                  style={{ ...btn, fontSize: 11, padding: "5px 8px", background: editKey === s.key ? C.ink : C.panel, color: editKey === s.key ? C.paper : C.ink }}>
+                  style={{ ...btn, fontSize: 11, padding: "5px 8px", background: curKey === s.key ? C.ink : C.panel, color: curKey === s.key ? C.paper : C.ink }}>
                   {s.label}
                 </button>
               ))}
@@ -903,8 +1314,9 @@ export default function RotationBoard() {
               svgRef={svgRef} onDown={(e, k) => { e.preventDefault(); setDrag(k); }} />
           </div>
           <div style={{ fontSize: 11, color: C.muted, marginTop: 8, lineHeight: 1.7 }}>
-            接發的點是 1–6號位。防守分兩套：<b>砲背</b>＝前排中間是副攻、<b>砲中</b>＝前排中間是攔中
-            （攔中與副攻互為對角，每輪只會出現一個）。前排三點：砲（左）・背或中（中）・舉（右）；
+            接發的點是 1–6號位，4人／5人各一套；4人接發時把不接的那兩位拖到網前即可。防守分兩套：<b>砲背</b>＝前排有副攻、<b>砲中</b>＝前排有攔中
+            （兩者互為對角，每輪只會出現一個）。前排三點：
+            砲中＝砲（左）・中（中）・舉（右）；砲背＝砲（左）・<b>舉（中）</b>・<b>背（右）</b>；
             後排點按照基本輪轉順序，除非適用特殊規則。
           </div>
           <div className="flex gap-2 mt-2">
@@ -917,9 +1329,39 @@ export default function RotationBoard() {
         </div>
       )}
 
+      {/* 輸出圖片 */}
+      {pngUrl && (
+        <div onClick={() => setPngUrl(null)} className="fixed inset-0 flex items-center justify-center no-print"
+          style={{ background: "rgba(34,29,23,0.78)", zIndex: 60, padding: 16 }}>
+          <div style={{ ...card, padding: 12, maxWidth: "94vw", maxHeight: "92vh", overflow: "auto" }}
+            onClick={(e) => e.stopPropagation()}>
+            {pngUrl === "error" ? (
+              <div style={{ fontSize: 13, color: C.warn }}>圖片產生失敗，請重試一次。</div>
+            ) : (
+              <>
+                <div className="flex items-center justify-between mb-2 gap-2">
+                  <div style={{ fontSize: 12, color: C.muted }}>
+                    手機長按圖片即可存到相簿，或直接分享到群組
+                  </div>
+                  <div className="flex gap-1">
+                    <a href={pngUrl} download="雙舉輪轉表.png"
+                      style={{ ...btn, background: C.ink, color: C.paper, fontWeight: 700, textDecoration: "none" }}>
+                      下載
+                    </a>
+                    <button onClick={() => setPngUrl(null)} style={btn}>關閉</button>
+                  </div>
+                </div>
+                <img src={pngUrl} alt="輪轉表"
+                  style={{ display: "block", width: "100%", maxWidth: 900, border: `1px solid ${C.edge}`, borderRadius: 6 }} />
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* 放大 */}
       {zoom && (() => {
-        const fm = formation(lineup, zoom.r, zoom.scene.id, anchors, roleMap);
+        const fm = formation(lineup, zoom.r, zoom.scene.id, anchors, roleMap, recvMode);
         const viol = fm.ok && zoom.scene.id === "recv" ? checkLegal(fm.spots) : [];
         return (
           <div onClick={() => setZoom(null)} className="fixed inset-0 flex items-center justify-center"
@@ -933,7 +1375,7 @@ export default function RotationBoard() {
                 <button onClick={() => setZoom(null)} style={btn}>關閉</button>
               </div>
               {fm.ok && (
-                <Court spots={fm.spots} ball={zoom.scene.ball && DEF_MAP[zoom.scene.id]} size={250} flag={viol.length > 0} />
+                <Court spots={fm.spots} byRole={showRole} ball={zoom.scene.ball && DEF_MAP[zoom.scene.id]} size={250} flag={viol.length > 0} />
               )}
               {viol.length > 0 && (
                 <div style={{ fontSize: 11, color: C.warn, marginTop: 8, lineHeight: 1.7 }}>
