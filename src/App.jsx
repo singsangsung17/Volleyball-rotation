@@ -237,7 +237,7 @@ const MIGRATIONS = {
     roleMap: d.roleMap,
     activeId: null,
     teams: (d.roster && d.roster.length)
-      ? [{ id: "t-legacy", name: "我的隊伍", roster: d.roster, court: d.court || [null, null, null, null, null, null] }]
+      ? [{ id: "t-legacy", name: "淡江資管", roster: d.roster, court: d.court || [null, null, null, null, null, null] }]
       : [],
   }),
   // v6 → v7：接發拆成 4 人／5 人兩套，並記住目前用哪一套
