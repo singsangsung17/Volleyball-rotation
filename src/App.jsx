@@ -237,7 +237,7 @@ const MIGRATIONS = {
     roleMap: d.roleMap,
     activeId: null,
     teams: (d.roster && d.roster.length)
-      ? [{ id: "t-legacy", name: "淡江資管", roster: d.roster, court: d.court || [null, null, null, null, null, null] }]
+      ? [{ id: "t-legacy", name: "我的隊伍", roster: d.roster, court: d.court || [null, null, null, null, null, null] }]
       : [],
   }),
   // v6 → v7：接發拆成 4 人／5 人兩套，並記住目前用哪一套
@@ -491,14 +491,26 @@ const PRESETS = {
 };
 const uid = (p) => p + Math.random().toString(36).slice(2, 8);
 const newTeam = (name) => ({ id: uid("t"), name, roster: [], court: [...EMPTY_COURT], mode: null });
+
+// 沒有存檔時的起始團隊
+const DEFAULT_TEAMS = [{
+  id: "t-giants",
+  name: "小巨人",
+  mode: null,
+  court: [...EMPTY_COURT],
+  roster: ["安", "佾", "羊", "蓁", "宋", "妙", "張", "邱"].map((n, i) => ({
+    id: "g" + (i + 1), name: n, role: "", libero: false,
+  })),
+}];
 // 後排依位置固定防守位置（可改；設為 null 即不套用）
 const DEFAULT_ROLE_MAP = { 攔中: "L", 副攻: "L", 大砲: "C", 舉球: "R", 自由: null };
 
 export default function RotationBoard() {
-  const [teams, setTeams] = useState([]);
+  const [teams, setTeams] = useState(DEFAULT_TEAMS);
   const [activeId, setActiveId] = useState(null);
   const [newName, setNewName] = useState("");
   const [renaming, setRenaming] = useState(null);
+  const [bulk, setBulk] = useState("");
   const [anchors, setAnchors] = useState(DEFAULT_ANCHORS);
   const [roleMap, setRoleMap] = useState(DEFAULT_ROLE_MAP);
   const [recvMode, setRecvMode] = useState("R5");
@@ -577,7 +589,7 @@ export default function RotationBoard() {
   };
   const clearSaved = async () => {
     try { await store.remove(STORAGE_KEY); } catch { /* 沒有存檔 */ }
-    setTeams([]); setActiveId(null); setAnchors(DEFAULT_ANCHORS); setRoleMap(DEFAULT_ROLE_MAP); setRecvMode("R5");
+    setTeams(DEFAULT_TEAMS); setActiveId(null); setAnchors(DEFAULT_ANCHORS); setRoleMap(DEFAULT_ROLE_MAP); setRecvMode("R5");
   };
 
   const byId = useMemo(() => Object.fromEntries(roster.map((e) => [e.id, e])), [roster]);
@@ -603,6 +615,16 @@ export default function RotationBoard() {
   const addMember = () => {
     if (roster.length >= 20) return;
     setRoster((R) => [...R, { id: uid("m"), name: "", role: "" }]);
+  };
+  // 一次貼上多個名字（空白、逗號、頓號、換行都能分隔）
+  const addBulk = () => {
+    const names = bulk.split(/[\s,、，\n]+/).filter(Boolean);
+    if (!names.length) return;
+    setRoster((R) => [
+      ...R,
+      ...names.slice(0, 20 - R.length).map((n) => ({ id: uid("m"), name: n, role: "" })),
+    ]);
+    setBulk("");
   };
   const removeMember = (id) => {
     if (zoneOf(id)) return;
@@ -1178,6 +1200,19 @@ export default function RotationBoard() {
                     </div>
                   );
                 })}
+                <div className="flex gap-1 mt-2">
+                  <input value={bulk} onChange={(ev) => setBulk(ev.target.value)}
+                    onKeyDown={(ev) => ev.key === "Enter" && addBulk()}
+                    placeholder="一次貼多個名字，空白或逗號分隔"
+                    style={{
+                      flex: 1, fontFamily: FONT, fontSize: 13, padding: "6px 10px",
+                      borderRadius: 8, border: `1px solid ${C.edge}`, background: "#fff", color: C.ink,
+                    }} />
+                  <button onClick={addBulk} disabled={roster.length >= 20 || !bulk.trim()}
+                    style={{ ...btn, opacity: roster.length >= 20 || !bulk.trim() ? 0.4 : 1 }}>
+                    批次新增
+                  </button>
+                </div>
                 <div className="flex items-center justify-between mt-1">
                   <button onClick={addMember} disabled={roster.length >= 20}
                     style={{ ...btn, opacity: roster.length >= 20 ? 0.4 : 1 }}>
