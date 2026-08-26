@@ -173,9 +173,9 @@ function checkLegal(spots) {
 const SCENES = [
   { id: "serve", label: "發球" },
   { id: "recv", label: "接發" },
-  { id: "d3", label: "左邊攻擊", ball: true }, // DEF_MAP.d3 = L
+  { id: "d3", label: "副攻攻擊", ball: true }, // DEF_MAP.d3 = L
   { id: "d2", label: "中間攻擊", ball: true },
-  { id: "d1", label: "右邊攻擊", ball: true },
+  { id: "d1", label: "大砲攻擊", ball: true },
 ];
 const ZONE_NAME = { 1: "右後・先發球", 2: "右前", 3: "中前", 4: "左前", 5: "左後", 6: "中後" };
 
@@ -839,12 +839,12 @@ export default function RotationBoard() {
     { key: `recv.${recvMode}.P2`, label: "舉球在2號位", get: (A) => (A.recv[recvMode] || A.recv.R5).P2, ball: null },
     { key: `recv.${recvMode}.P3`, label: "舉球在3號位", get: (A) => (A.recv[recvMode] || A.recv.R5).P3, ball: null },
     { key: `recv.${recvMode}.P4`, label: "舉球在4號位", get: (A) => (A.recv[recvMode] || A.recv.R5).P4, ball: null },
-    { key: "def.A.L", label: "左邊攻擊", get: (A) => A.def.A.L, ball: "L" },
+    { key: "def.A.L", label: "副攻攻擊", get: (A) => A.def.A.L, ball: "L" },
     { key: "def.A.C", label: "中間攻擊", get: (A) => A.def.A.C, ball: "C" },
-    { key: "def.A.R", label: "右邊攻擊", get: (A) => A.def.A.R, ball: "R" },
-    { key: "def.M.L", label: "左邊攻擊", get: (A) => A.def.M.L, ball: "L" },
+    { key: "def.A.R", label: "大砲攻擊", get: (A) => A.def.A.R, ball: "R" },
+    { key: "def.M.L", label: "副攻攻擊", get: (A) => A.def.M.L, ball: "L" },
     { key: "def.M.C", label: "中間攻擊", get: (A) => A.def.M.C, ball: "C" },
-    { key: "def.M.R", label: "右邊攻擊", get: (A) => A.def.M.R, ball: "R" },
+    { key: "def.M.R", label: "大砲攻擊", get: (A) => A.def.M.R, ball: "R" },
   ];
   const cur = EDIT_SETS.find((s) => s.key === editKey) || EDIT_SETS[0];
   const curKey = cur.key; // editKey 可能過期，實際生效的是這個
