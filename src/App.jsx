@@ -277,19 +277,29 @@ function statsOf(rallies) {
 // 某個結束原因是誰造成的：發球失誤看發球員，其餘看該球最後一個記號
 function blameOf(rallies, end) {
   const tally = {};
-  rallies.forEach((ra) => {
+  let us = 0, them = 0;
+  rallies.forEach((ra, i) => {
+    if (ra.won) us += 1; else them += 1;
     if (ra.end !== end) return;
     let id = null;
-    if (end === "serveMiss" || end === "ace") id = ra.serverId; // 發球相關的算在發球員頭上
+    if (end === "oppMiss") id = "__opp";                        // 是對方犯錯，不算我方任何人
+    else if (end === "serveMiss" || end === "ace") id = ra.serverId; // 發球相關的算發球員
     else {
-      const mk = (ra.marks || []).slice(-1)[0];
+      const mk = (ra.marks || []).slice(-1)[0];                 // 其餘看該球最後畫的那個記號
       id = mk ? mk.playerId : null;
     }
     const key = id || "__none";
-    tally[key] = (tally[key] || 0) + 1;
+    (tally[key] = tally[key] || []).push({ i, us, them, rot: ra.rot, at: ra.at, base: ra._base });
   });
-  return Object.entries(tally).sort((a, b) => b[1] - a[1]);
+  return Object.entries(tally).sort((a, b) => b[1].length - a[1].length);
 }
+
+// 毫秒轉 mm:ss，給回放影片對時間用
+const clock = (ms) => {
+  if (ms === null || ms === undefined || !isFinite(ms) || ms < 0) return "—";
+  const s = Math.floor(ms / 1000);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+};
 
 // 攻擊表現：得分／出手數
 function attackOf(rallies) {
@@ -321,7 +331,7 @@ function applyAction(m, act) {
   const endRally = (won, end) => {
     n.rallies.push({
       rot: m.rot, serving: m.serving, serverId: n.serverId, serveCount: m.serveCount,
-      marks: n.marks, won, end,
+      marks: n.marks, won, end, at: act.at || null,
     });
     n.marks = [];
     n.serverId = null;
@@ -921,13 +931,15 @@ export default function RotationBoard() {
     setHist([]);
     setMatch({
       name: matchName.trim() || new Date().toLocaleDateString("zh-TW"),
+      startedAt: Date.now(),
       court: [...court], us: 0, them: 0, rot: 0, serving: weServe, serveCount: 0,
       serverId: null, page: weServe ? "serve" : "recv", marks: [], rallies: [], winner: null,
     });
   };
   const act = (a) => {
     setHist((H) => [...H.slice(-40), match]);
-    setMatch((m) => applyAction(m, a));
+    const stamped = { ...a, at: Date.now() };
+    setMatch((m) => applyAction(m, stamped));
     setInk(null);
   };
   const undoAll = () => { setInk(null); setPending(null); setNote(""); };
@@ -938,6 +950,7 @@ export default function RotationBoard() {
       setSets((S) => [...S.slice(-29), {
         at: Date.now(), teamId: activeId, teamName: team ? team.name : "",
         name: match.name || "", us: match.us, them: match.them, rallies: match.rallies,
+        startedAt: match.startedAt || null, endedAt: Date.now(),
         names: Object.fromEntries(roster.map((e) => [e.id, e.name || "？"])),
       }]);
     }
@@ -1881,11 +1894,13 @@ export default function RotationBoard() {
       {team && tab === "match" && mView === "report" && (() => {
         const mine = sets.map((x, i) => ({ ...x, _i: i })).filter((x) => x.teamId === activeId);
         const live = match && match.rallies.length
-          ? [{ _i: -1, name: match.name, us: match.us, them: match.them, rallies: match.rallies, names: null }] : [];
+          ? [{ _i: -1, name: match.name, us: match.us, them: match.them, rallies: match.rallies,
+               names: null, startedAt: match.startedAt || null }] : [];
         const use = statScope === "live" ? live
           : statScope === "all" ? mine
             : mine.filter((x) => String(x._i) === statScope);
-        const rallies = use.flatMap((x) => x.rallies);
+        // 帶上該場的起始時間，逐球回顧才算得出「第幾分幾秒」
+        const rallies = use.flatMap((x) => x.rallies.map((ra) => ({ ...ra, _base: x.startedAt || null })));
         const st = statsOf(rallies);
         const atk = attackOf(rallies);
         const nameOf = (id) => {
@@ -1918,13 +1933,35 @@ export default function RotationBoard() {
                 </span>
               </div>
               {open && (
-                <div style={{ margin: "2px 0 6px 66px", fontSize: 11, color: C.muted, lineHeight: 1.9 }}>
-                  {blameOf(rallies, k).length === 0 ? "沒有紀錄" : blameOf(rallies, k).map(([id, n]) => (
-                    <div key={id}>
-                      {id === "__none" ? "沒記到是誰（按了跳過）" : nameOf(id)}
-                      <span style={{ fontFamily: MONO, marginLeft: 6 }}>{n}</span>
-                    </div>
-                  ))}
+                <div style={{ margin: "2px 0 6px 66px", fontSize: 11, lineHeight: 1.9 }}>
+                  {blameOf(rallies, k).length === 0 ? (
+                    <span style={{ color: C.muted }}>沒有紀錄</span>
+                  ) : blameOf(rallies, k).map(([id, list]) => {
+                    const bk = k + "/" + id;
+                    const bOpen = openBlame === bk;
+                    const label = id === "__opp" ? "對方（不算我方球員）"
+                      : id === "__none" ? "沒記到是誰（按了跳過）" : nameOf(id);
+                    return (
+                      <div key={id}>
+                        <span onClick={() => setOpenBlame(bOpen ? null : bk)}
+                          style={{ cursor: "pointer", color: bOpen ? C.ink : C.muted, fontWeight: bOpen ? 700 : 400 }}>
+                          {label}
+                          <span style={{ fontFamily: MONO, marginLeft: 6 }}>{list.length}</span>
+                          <span style={{ marginLeft: 4, opacity: 0.6 }}>{bOpen ? "▾" : "▸"}</span>
+                        </span>
+                        {bOpen && (
+                          <div style={{ margin: "0 0 4px 12px", color: C.muted, fontFamily: MONO, fontSize: 10.5 }}>
+                            {list.map((o) => (
+                              <div key={o.i}>
+                                {o.us}:{o.them}　R{o.rot + 1}
+                                {o.at && o.base ? `　${clock(o.at - o.base)}` : ""}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -1959,6 +1996,9 @@ export default function RotationBoard() {
                       }}>
                       {x.name || new Date(x.at).toLocaleDateString("zh-TW")}
                       <span style={{ fontFamily: MONO, marginLeft: 8, opacity: 0.75 }}>{x.us}:{x.them}</span>
+                      {x.startedAt && x.endedAt && (
+                        <span style={{ fontFamily: MONO, marginLeft: 8, opacity: 0.6 }}>{clock(x.endedAt - x.startedAt)}</span>
+                      )}
                     </button>
                     <button onClick={() => {
                         setSets((S) => S.filter((_, i) => i !== x._i));
@@ -2062,7 +2102,7 @@ export default function RotationBoard() {
                   </div>
                   {dropSrc === "def" ? (
                     <div className="flex gap-1" style={{ alignItems: "flex-start" }}>
-                      {[["L", "對手大砲", "d3"], ["C", "中間", "d2"], ["R", "副攻", "d1"]].map(([d, l, sc]) => {
+                      {[["L", "副攻", "d3"], ["C", "中間", "d2"], ["R", "大砲", "d1"]].map(([d, l, sc]) => {
                         const fm = formFor(sc);
                         const mk = rallies.flatMap((ra) => (ra.marks || []).filter((q) => q.src === "def" && q.dir === d));
                         return (
@@ -2107,6 +2147,9 @@ export default function RotationBoard() {
                             style={{ fontSize: 11.5, padding: "3px 0", cursor: "pointer" }}
                             onClick={() => setOpenRally(open ? null : i)}>
                             <span style={{ fontFamily: MONO, width: 46, color: C.muted }}>{t.us}:{t.them}</span>
+                            <span style={{ fontFamily: MONO, width: 40, color: C.muted }}>
+                              {ra.at && ra._base ? clock(ra.at - ra._base) : "—"}
+                            </span>
                             <span style={{ fontFamily: MONO, width: 24, color: C.muted }}>R{t.rot + 1}</span>
                             <span style={{ width: 52, color: C.muted }}>{t.serving ? "我方發" : "對方發"}</span>
                             <span style={{ color: WIN_ENDS.includes(t.end) ? C.green : C.red, fontWeight: 700 }}>
