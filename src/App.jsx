@@ -18,7 +18,7 @@ const ROLE_ABBR = { 舉球: "舉", 大砲: "砲", 攔中: "中", 副攻: "背", 
    發球圖用固定的平行陣（SERVE_GRID），格子分配與防守完全同一套規則；
    1號位是發球員，站在端線外
    ============================================================ */
-// 發球站位：平行的兩排，格子分配與防守同一套規則（前排看角色、後排看 roleMap）
+// 發球站位：平行的兩排，格子分配與防守同一套規則（前排看角色、後排看個人設定）
 const SERVE_GRID = {
   FL: [0.20, 0.14], FC: [0.50, 0.14], FR: [0.80, 0.14],
   BL: [0.20, 0.70], BC: [0.50, 0.70], BR: [0.80, 0.70],
@@ -29,28 +29,28 @@ const DEFAULT_ANCHORS = {
   // 接發兩套：R5＝5人接發、R4＝4人接發
   recv: {
     R5: {
-      P2: { 1: [0.746, 0.816], 2: [0.906, 0.115], 3: [0.795, 0.404], 4: [0.168, 0.407], 5: [0.297, 0.816], 6: [0.503, 0.616] },
-      P3: { 1: [0.737, 0.807], 2: [0.805, 0.382], 3: [0.595, 0.127], 4: [0.189, 0.373], 5: [0.312, 0.825], 6: [0.506, 0.598] },
-      P4: { 1: [0.725, 0.822], 2: [0.869, 0.401], 3: [0.152, 0.413], 4: [0.106, 0.099], 5: [0.266, 0.810], 6: [0.491, 0.625] },
+      P2: { 1: [0.660, 0.762], 2: [0.906, 0.115], 3: [0.823, 0.485], 4: [0.206, 0.096], 5: [0.190, 0.488], 6: [0.375, 0.746] },
+      P3: { 1: [0.646, 0.767], 2: [0.817, 0.460], 3: [0.588, 0.113], 4: [0.269, 0.181], 5: [0.188, 0.488], 6: [0.377, 0.771] },
+      P4: { 1: [0.723, 0.827], 2: [0.869, 0.401], 3: [0.198, 0.448], 4: [0.104, 0.163], 5: [0.271, 0.819], 6: [0.525, 0.627] },
     },
     R4: {
-      P2: { 1: [0.847, 0.549], 2: [0.885, 0.135], 3: [0.177, 0.515], 4: [0.051, 0.129], 5: [0.348, 0.795], 6: [0.673, 0.795] },
-      P3: { 1: [0.837, 0.471], 2: [0.594, 0.224], 3: [0.499, 0.112], 4: [0.140, 0.433], 5: [0.341, 0.785], 6: [0.714, 0.768] },
-      P4: { 1: [0.865, 0.518], 2: [0.218, 0.573], 3: [0.071, 0.286], 4: [0.054, 0.091], 5: [0.437, 0.785], 6: [0.741, 0.765] },
+      P2: { 1: [0.862, 0.506], 2: [0.885, 0.179], 3: [0.217, 0.467], 4: [0.088, 0.165], 5: [0.373, 0.781], 6: [0.671, 0.792] },
+      P3: { 1: [0.831, 0.517], 2: [0.608, 0.248], 3: [0.588, 0.113], 4: [0.150, 0.537], 5: [0.369, 0.787], 6: [0.671, 0.783] },
+      P4: { 1: [0.687, 0.825], 2: [0.850, 0.515], 3: [0.081, 0.256], 4: [0.160, 0.104], 5: [0.196, 0.585], 6: [0.356, 0.835] },
     },
   },
   def: {
     // M＝砲中（前排中間是攔中）
     M: {
-      L: { FL: [0.153, 0.043], FC: [0.294, 0.310], FR: [0.805, 0.330], BL: [0.171, 0.841], BC: [0.475, 0.798], BR: [0.703, 0.656] },
-      C: { FL: [0.294, 0.334], FC: [0.509, 0.067], FR: [0.718, 0.327], BL: [0.235, 0.708], BC: [0.5, 0.88], BR: [0.786, 0.687] },
-      R: { FL: [0.168, 0.364], FC: [0.851, 0.071], FR: [0.697, 0.313], BL: [0.303, 0.641], BC: [0.568, 0.816], BR: [0.869, 0.844] },
+      L: { FL: [0.177, 0.253], FC: [0.466, 0.155], FR: [0.805, 0.330], BL: [0.171, 0.841], BC: [0.475, 0.798], BR: [0.703, 0.656] },
+      C: { FL: [0.285, 0.342], FC: [0.509, 0.127], FR: [0.762, 0.330], BL: [0.235, 0.708], BC: [0.5, 0.88], BR: [0.786, 0.687] },
+      R: { FL: [0.168, 0.364], FC: [0.602, 0.133], FR: [0.838, 0.265], BL: [0.303, 0.641], BC: [0.568, 0.816], BR: [0.869, 0.844] },
     },
-    // A＝砲背（前排中間是副攻）
+    // A＝砲背（前排有副攻）：砲(左) 舉(中) 背(右)
     A: {
-      L: { FL: [0.157, 0.050], FC: [0.263, 0.279], FR: [0.826, 0.348], BL: [0.171, 0.841], BC: [0.475, 0.798], BR: [0.703, 0.656] },
-      C: { FL: [0.285, 0.342], FC: [0.499, 0.043], FR: [0.728, 0.339], BL: [0.235, 0.708], BC: [0.5, 0.88], BR: [0.786, 0.687] },
-      R: { FL: [0.168, 0.364], FC: [0.697, 0.313], FR: [0.854, 0.060], BL: [0.303, 0.641], BC: [0.568, 0.816], BR: [0.869, 0.844] },
+      L: { FL: [0.177, 0.253], FC: [0.506, 0.123], FR: [0.826, 0.348], BL: [0.171, 0.841], BC: [0.475, 0.798], BR: [0.703, 0.656] },
+      C: { FL: [0.285, 0.342], FC: [0.503, 0.154], FR: [0.725, 0.339], BL: [0.235, 0.708], BC: [0.5, 0.88], BR: [0.786, 0.687] },
+      R: { FL: [0.168, 0.364], FC: [0.623, 0.163], FR: [0.848, 0.290], BL: [0.303, 0.641], BC: [0.568, 0.816], BR: [0.869, 0.844] },
     },
   },
 };
@@ -70,38 +70,49 @@ const PIN_SLOT = { L: "BL", C: "BC", R: "BR" };
 const PIN_NAME = { L: "守左", C: "守中", R: "守右" };
 
 // 後排三格分配，三層優先序：
-// ① 依位置固定（roleMap）→ ② 依基本輪轉順序遞補
+// ① 個人指定的格子 → ② 依基本輪轉順序遞補
 // 同一格若兩人搶，先輪到的人（5→6→1）取得，另一人往下一層遞補；三格必定填滿
-function backOrder(occ, roleMap) {
+// 後排只有一層規則：每位球員自己的 back（沒設就依基本輪轉順序）
+// pri：{ "輪次:格子": 球員id }，同一格有兩人想要時指定誰優先
+function backOrder(occ, r, pri) {
   const players = BACK.map((p) => ({ pos: p, e: occ[p] }));
   const slotted = {};
   const done = new Set();
-  const claim = (pick) =>
-    players.forEach((pl, i) => {
-      if (done.has(i)) return;
-      const s = PIN_SLOT[pick(pl.e)];
-      if (s && !slotted[s]) { slotted[s] = pl; done.add(i); }
-    });
-  claim((e) => e && roleMap && roleMap[e.role]);       // ① 依位置固定
-  const rest = players.filter((_, i) => !done.has(i)); // ② 其餘依輪轉順序遞補
+  // ① 該輪指定了優先權的格子先給
+  ["L", "C", "R"].forEach((k) => {
+    const id = pri && pri[`${r}:${k}`];
+    if (!id) return;
+    const i = players.findIndex((pl, idx) => !done.has(idx) && pl.e && pl.e.id === id);
+    if (i < 0) return;
+    slotted[PIN_SLOT[k]] = players[i];
+    done.add(i);
+  });
+  // ② 其餘照各自想守的格子，先輪到的先取
+  players.forEach((pl, i) => {
+    if (done.has(i)) return;
+    const s = PIN_SLOT[pl.e && pl.e.back];
+    if (s && !slotted[s]) { slotted[s] = pl; done.add(i); }
+  });
+  const rest = players.filter((_, i) => !done.has(i)); // ③ 剩下的依輪轉順序遞補
   let ri = 0;
   return ["BL", "BC", "BR"].map((s) => slotted[s] || rest[ri++]);
 }
 
 
 // 同排三人規則撞格：列出每一輪的衝突
-function backConflicts(lineup, roleMap) {
+// 回傳 [{ r, slot, players:[球員] }]：某一輪同一格有兩人以上想守
+function backConflicts(lineup) {
   const out = [];
   for (let r = 0; r < 6; r++) {
     const occ = occupancy(lineup, r);
     const want = {};
     BACK.forEach((p) => {
       const e = occ[p];
-      const k = e && roleMap && roleMap[e.role];
-      if (k) (want[k] = want[k] || []).push(`${e.name || "？"}(${e.role})`);
+      const k = e && e.back;
+      if (k) (want[k] = want[k] || []).push(e);
     });
     Object.keys(want).forEach((k) => {
-      if (want[k].length > 1) out.push(`R${r + 1}　${want[k].join("、")} 都要${PIN_NAME[k]}`);
+      if (want[k].length > 1) out.push({ r, slot: k, players: want[k] });
     });
   }
   return out;
@@ -134,7 +145,7 @@ function frontByRole(occ, set) {
 const liberoIn = (e, pos, serve) => !!(e && e.libero) && BACK.includes(pos) && !(serve && pos === 1);
 
 // 站位解析：{ok, spots:[{pos, e, xy, lib}]} 或 {ok:false, reason}
-function formation(lineup, r, sceneId, A, roleMap, recvMode) {
+function formation(lineup, r, sceneId, A, recvMode, pri) {
   if (lineup.length !== 6 || lineup.some((e) => !e)) return { ok: false, reason: "名單未滿 6 人" };
   const occ = occupancy(lineup, r);
 
@@ -154,7 +165,7 @@ function formation(lineup, r, sceneId, A, roleMap, recvMode) {
   const f = frontByRole(occ, set);
   if (f.err) return { ok: false, reason: f.err };
   const spots = [...f.spots];
-  backOrder(occ, roleMap).forEach((b, i) => {
+  backOrder(occ, r, pri).forEach((b, i) => {
     const k = ["BL", "BC", "BR"][i];
     const xy = sceneId === "serve" && b.pos === 1 ? SERVE_GRID.SV : set[k];
     spots.push({ ...b, xy, slot: k, lib: liberoIn(b.e, b.pos, serve) });
@@ -241,6 +252,9 @@ function applyAction(m, act) {
     n.serverId = act.serverId;
     if (act.kind === "miss") { loseRally(); endRally(false); n.page = "recv"; }
     else n.page = "def";
+  } else if (act.kind === "oppmiss") {
+    // 對方失誤：我方得分，若原本沒有發球權就 side-out 輪轉
+    winRally(); endRally(true); n.page = "serve";
   } else if (act.kind === "ace") {
     // Ace 在防守頁按下：對方完全沒碰到球。發球數已在發球頁計過，這裡只加分
     winRally(); endRally(true); n.page = "serve";
@@ -290,7 +304,7 @@ const BALL_X = { L: 0.12, C: 0.5, R: 0.88 };
 const toPx = (x) => x * 100;
 const toPy = (y) => 30 + y * 100;
 const STORAGE_KEY = "volley-squad-v1";
-const STORAGE_V = 11; // 每次改變存檔結構就 +1，並在 MIGRATIONS 補一步
+const STORAGE_V = 12; // 每次改變存檔結構就 +1，並在 MIGRATIONS 補一步
 
 /* ---- 存檔位置 ----------------------------------------------------------
    Claude 內建環境有 window.storage（每位使用者各自一份，預設 shared=false）。
@@ -360,8 +374,20 @@ const MIGRATIONS = {
   9: (d) => ({ ...d, anchors: d.anchors ? normalizeAnchors(d.anchors) : d.anchors }),
   // v10 → v11：新增比賽追蹤
   10: (d) => ({ ...d, match: null }),
+  // v11 → v12：後排防守取消「依位置」那一層，把舊設定併進每位球員身上
+  11: (d) => {
+    const rm = d.roleMap || {};
+    return {
+      ...d,
+      roleMap: null,
+      teams: (d.teams || []).map((t) => ({
+        ...t,
+        roster: (t.roster || []).map((e) => ({ ...e, back: e.back || rm[e.role] || null })),
+      })),
+    };
+  },
   // 下次改結構時照這個形狀往下加：
-  // 11: (d) => ({ ...d, 新欄位: 預設值 }),
+  // 12: (d) => ({ ...d, 新欄位: 預設值 }),
 };
 
 // 只收正規點位，順手丟掉早期版本殘留的鍵（例如已廢除的 FA）
@@ -397,7 +423,7 @@ function fromLegacy(d) {
     v: 5,
     roster: (d.roster || []).map((e) => ({
       id: e.id, name: e.name || "", role: e.role || "", libero: !!e.libero,
-      // 早期的 back / pins / pinId / special 規則已由 roleMap 取代，不保留
+      back: e.back || null, // 後排固定位置
     })),
     court: d.court,
     // 注意：fromLegacy 產出的是 v5 結構，接著會被 MIGRATIONS[5] 轉成團隊制
@@ -636,7 +662,7 @@ const PRESETS = {
   砲背: ["舉球", "副攻", "大砲", "舉球", "副攻", "大砲"],
 };
 const uid = (p) => p + Math.random().toString(36).slice(2, 8);
-const newTeam = (name) => ({ id: uid("t"), name, roster: [], court: [...EMPTY_COURT], mode: null });
+const newTeam = (name) => ({ id: uid("t"), name, roster: [], court: [...EMPTY_COURT], mode: null, pri: {} });
 
 // 沒有存檔時的起始團隊
 const DEFAULT_TEAMS = [{
@@ -658,7 +684,6 @@ export default function RotationBoard() {
   const [renaming, setRenaming] = useState(null);
   const [bulk, setBulk] = useState("");
   const [anchors, setAnchors] = useState(DEFAULT_ANCHORS);
-  const [roleMap, setRoleMap] = useState(DEFAULT_ROLE_MAP);
   const [recvMode, setRecvMode] = useState("R5");
   const [tab, setTab] = useState("setup");
   const [selZone, setSelZone] = useState(null);
@@ -683,6 +708,14 @@ export default function RotationBoard() {
   const roster = team ? team.roster : [];
   const court = team ? team.court : EMPTY_COURT;
   const patchTeam = (fn) => setTeams((T) => T.map((t) => (t.id === activeId ? fn(t) : t)));
+  const pri = (team && team.pri) || {};
+  const setPri = (r, slot, id) =>
+    patchTeam((t) => {
+      const next = { ...(t.pri || {}) };
+      const key = `${r}:${slot}`;
+      if (next[key] === id) delete next[key]; else next[key] = id;
+      return { ...t, pri: next };
+    });
   const setRoster = (u) => patchTeam((t) => ({ ...t, roster: typeof u === "function" ? u(t.roster) : u }));
   const setCourt = (u) => patchTeam((t) => ({ ...t, court: typeof u === "function" ? u(t.court) : u }));
 
@@ -713,7 +746,6 @@ export default function RotationBoard() {
           if (Array.isArray(d.teams)) setTeams(d.teams);
           if (d.activeId) setActiveId(d.activeId);
           if (d.anchors && d.anchors.recv && d.anchors.def) setAnchors(normalizeAnchors(d.anchors));
-          if (d.roleMap) setRoleMap(d.roleMap);
           if (d.recvMode) setRecvMode(d.recvMode);
           if (d.match) setMatch(d.match);
         }
@@ -726,22 +758,22 @@ export default function RotationBoard() {
     if (!readyRef.current) return;
     const t = setTimeout(() => {
       try {
-        store.set(STORAGE_KEY, JSON.stringify({ v: STORAGE_V, teams, activeId, anchors, roleMap, recvMode, match })).catch(() => {});
+        store.set(STORAGE_KEY, JSON.stringify({ v: STORAGE_V, teams, activeId, anchors, recvMode, match })).catch(() => {});
       } catch { /* 儲存失敗不影響操作 */ }
     }, 900);
     return () => clearTimeout(t);
-  }, [teams, activeId, anchors, roleMap, recvMode, match]);
+  }, [teams, activeId, anchors, recvMode, match]);
   const save = async () => {
     setSaveState("saving");
     try {
-      const r = await store.set(STORAGE_KEY, JSON.stringify({ v: STORAGE_V, teams, activeId, anchors, roleMap, recvMode, match }));
+      const r = await store.set(STORAGE_KEY, JSON.stringify({ v: STORAGE_V, teams, activeId, anchors, recvMode, match }));
       setSaveState(r ? "saved" : "error");
     } catch { setSaveState("error"); }
     setTimeout(() => setSaveState(""), 1800);
   };
   const clearSaved = async () => {
     try { await store.remove(STORAGE_KEY); } catch { /* 沒有存檔 */ }
-    setTeams(DEFAULT_TEAMS); setActiveId(null); setAnchors(DEFAULT_ANCHORS); setRoleMap(DEFAULT_ROLE_MAP); setRecvMode("R5");
+    setTeams(DEFAULT_TEAMS); setActiveId(null); setAnchors(DEFAULT_ANCHORS); setRecvMode("R5");
   };
 
   const byId = useMemo(() => Object.fromEntries(roster.map((e) => [e.id, e])), [roster]);
@@ -752,7 +784,7 @@ export default function RotationBoard() {
   const issues = useMemo(() => {
     const out = [];
     for (let r = 0; r < 6; r++) {
-      const fm = formation(lineup, r, "recv", anchors);
+      const fm = formation(lineup, r, "recv", anchors, recvMode, pri);
       if (!fm.ok) continue;
       const bad = checkLegal(fm.spots);
       if (bad.length) out.push(`第 ${r + 1} 輪接發：${bad[0]}`);
@@ -760,7 +792,7 @@ export default function RotationBoard() {
     return out;
   }, [lineup, anchors, recvMode]);
 
-  const clashes = useMemo(() => backConflicts(lineup, roleMap), [lineup, roleMap]);
+  const clashes = useMemo(() => backConflicts(lineup), [lineup]);
 
   /* ---- 比賽追蹤 ---- */
   const mLineup = useMemo(
@@ -768,7 +800,7 @@ export default function RotationBoard() {
     [match, byId]
   );
   const mReady = mLineup.length === 6 && mLineup.every(Boolean);
-  const mForm = (scene) => (mReady ? formation(mLineup, match.rot, scene, anchors, roleMap, recvMode) : { ok: false, reason: "名單有異動" });
+  const mForm = (scene) => (mReady ? formation(mLineup, match.rot, scene, anchors, recvMode, pri) : { ok: false, reason: "名單有異動" });
   const server = mReady ? occupancy(mLineup, match.rot)[1] : null;
 
   const startMatch = (weServe) => {
@@ -870,16 +902,15 @@ export default function RotationBoard() {
   const rotateOne = () => setCourt((cur) => [...cur.slice(1), cur[0]]);
   const rotateBack = () => setCourt((cur) => [cur[5], ...cur.slice(0, 5)]);
   // 規則寫在人身上；再點一次同一格＝取消
-  const clearAllPins = () => {
-    setRoster((R) => R.map((e) => (e.libero ? { ...e, libero: false } : e)));
-    setRoleMap({ 舉球: null, 大砲: null, 副攻: null, 攔中: null, 自由: null });
-  };
+  const clearAllPins = () =>
+    setRoster((R) => R.map((e) => (e.libero || e.back ? { ...e, libero: false, back: null } : e)));
   const switchRecvMode = (m) => {
     setRecvMode(m);
     setEditKey((k) => (k.startsWith("recv.") ? k.replace(/^recv\.(R4|R5)\./, `recv.${m}.`) : k));
   };
-  const setRoleSlot = (role, k) =>
-    setRoleMap((M) => ({ ...M, [role]: M[role] === k ? null : k }));
+  // 把這位球員目前的後排設定，一次套用到所有同位置的人
+  const applyBackToRole = (role, k) =>
+    setRoster((R) => R.map((e) => (e.role === role ? { ...e, back: k } : e)));
   /* ---- 輸出 PNG --------------------------------------------------------
      直接用 Canvas 2D 逐格重畫整張輪轉表，不經過 SVG→圖片那條路——
      那條路在轉檔時載不到網頁字型，中文會變成方框。Canvas 的 fillText
@@ -996,7 +1027,7 @@ export default function RotationBoard() {
               { size: 14, weight: 800 });
           });
           SCENES.forEach((sc, i) => {
-            const fm = formation(lineup, r, sc.id, anchors, roleMap, recvMode);
+            const fm = formation(lineup, r, sc.id, anchors, recvMode, pri);
             const ox = colX(i);
             if (!fm.ok) {
               ctx.save();
@@ -1199,18 +1230,6 @@ export default function RotationBoard() {
         </div>
       )}
 
-      {team && clashes.length > 0 && (
-        <div className="no-print" style={{ ...card, borderColor: C.blue, marginBottom: 8, padding: 9 }}>
-          <div style={{ fontSize: 12, color: C.blue, fontWeight: 700 }}>
-            後排規則撞格 {clashes.length} 處
-          </div>
-          <div style={{ fontSize: 11, color: C.muted, marginTop: 3, lineHeight: 1.6 }}>
-            {clashes.slice(0, 3).join("　/　")}
-            <br />先輪到的人取得該格，另一人依基本輪轉順序遞補
-          </div>
-        </div>
-      )}
-
       {team && issues.length > 0 && (
         <div className="no-print" style={{ ...card, borderColor: C.warn, marginBottom: 8, padding: 9 }}>
           <div style={{ fontSize: 12, color: C.warn, fontWeight: 700 }}>
@@ -1297,44 +1316,48 @@ export default function RotationBoard() {
 
               <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>
                 後排防守位置
-                {selEntry.role && (
-                  <span style={{ marginLeft: 4 }}>（設定所有「{selEntry.role}」）</span>
-                )}
+                <span style={{ marginLeft: 4 }}>（輪到後排時固定守哪一格）</span>
               </div>
               <div className="flex gap-1 flex-wrap">
-                {["L", "C", "R"].map((k) => {
-                  const on = !!selEntry.role && roleMap[selEntry.role] === k;
+                {[[null, "不指定"], ["L", "守左"], ["C", "守中"], ["R", "守右"]].map(([k, l]) => {
+                  const on = (selEntry.back || null) === k;
                   return (
-                    <button key={k} disabled={!selEntry.role}
-                      onClick={() => setRoleSlot(selEntry.role, k)}
+                    <button key={l} onClick={() => setMember(selEntry.id, { back: k })}
                       style={{
-                        ...btn, padding: "5px 9px",
-                        background: on ? C.blue : C.panel,
-                        color: on ? "#fff" : C.ink,
-                        opacity: selEntry.role ? 1 : 0.4,
+                        ...btn, padding: "6px 11px", fontWeight: on ? 700 : 400,
+                        background: on ? C.blue : C.panel, color: on ? "#fff" : C.ink,
                       }}>
-                      {PIN_NAME[k]}
+                      {l}
                     </button>
                   );
                 })}
+              </div>
+              <div className="flex gap-1 flex-wrap items-center" style={{ marginTop: 6 }}>
+                {selEntry.role && (
+                  <button onClick={() => applyBackToRole(selEntry.role, selEntry.back || null)}
+                    style={{ ...btn, padding: "5px 9px", fontSize: 11 }}>
+                    套用到所有{selEntry.role}
+                  </button>
+                )}
                 <button onClick={() => setMember(selEntry.id, { libero: !selEntry.libero })}
                   style={{
-                    ...btn, padding: "5px 9px",
+                    ...btn, padding: "5px 9px", fontSize: 11,
                     background: selEntry.libero ? C.ink : C.panel,
                     color: selEntry.libero ? C.paper : C.ink,
                   }}>
                   替自由 L
                 </button>
-                {(roster.some((e) => e.libero) || ROLE_LIST.some((x) => roleMap[x])) && (
+                {roster.some((e) => e.libero || e.back) && (
                   <button onClick={clearAllPins}
-                    style={{ ...btn, padding: "5px 9px", marginLeft: "auto", color: C.warn }}>
+                    style={{ ...btn, padding: "5px 9px", fontSize: 11, marginLeft: "auto", color: C.warn }}>
                     全部清除
                   </button>
                 )}
               </div>
-              <div style={{ fontSize: 10.5, color: C.muted, marginTop: 4 }}>
-                依位置套用到所有輪次，未指定的位置依基本輪轉順序遞補。
-                「替自由」＝該員輪到後排時由自由球員替上（輪到發球時仍由本人發球）
+              <div style={{ fontSize: 10.5, color: C.muted, marginTop: 6, lineHeight: 1.8 }}>
+                「不指定」＝輪到後排時依基本輪轉順序（5號位→左、6號位→中、1號位→右）。
+                兩人想守同一格時，下方會列出那一輪讓你指定誰優先。
+                「替自由」＝該員輪到後排時由自由球員替上（輪到發球時仍由本人發球）。
               </div>
               </>)}
             </div>
@@ -1353,6 +1376,36 @@ export default function RotationBoard() {
               </button>
             ))}
           </div>
+
+          {clashes.length > 0 && (
+            <div style={{ borderTop: `1px solid ${C.edge}`, marginTop: 12, paddingTop: 10 }}>
+              <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 2 }}>同一格有兩人想守</div>
+              <div style={{ fontSize: 11, color: C.muted, marginBottom: 6 }}>
+                點名字指定那一輪誰優先，另一人會依基本輪轉順序遞補
+              </div>
+              {clashes.map((c) => {
+                const key = `${c.r}:${c.slot}`;
+                const win = pri[key];
+                return (
+                  <div key={key} className="flex items-center gap-1 flex-wrap mb-1">
+                    <span style={{ fontFamily: MONO, fontSize: 11, color: C.muted, width: 26 }}>R{c.r + 1}</span>
+                    <span style={{ fontSize: 12, fontWeight: 700, width: 40 }}>{PIN_NAME[c.slot]}</span>
+                    {c.players.map((e) => (
+                      <button key={e.id} onClick={() => setPri(c.r, c.slot, e.id)}
+                        style={{
+                          ...btn, padding: "4px 10px", fontWeight: 700,
+                          background: win === e.id ? C.blue : C.panel,
+                          color: win === e.id ? "#fff" : C.ink,
+                        }}>
+                        {e.name || "？"}
+                      </button>
+                    ))}
+                    {!win && <span style={{ fontSize: 10.5, color: C.muted }}>未指定＝先輪到的先取</span>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
           {sameRolePairs.length > 0 && (
             <div className="flex items-center gap-1 flex-wrap mt-3">
@@ -1635,6 +1688,12 @@ export default function RotationBoard() {
                         </button>
                       )}
                       {isDef && (
+                        <button onClick={() => { clearInk(); act({ page: "def", kind: "oppmiss" }); }}
+                          style={{ ...btn, flex: 1, padding: "12px 0", fontSize: 15, fontWeight: 800, background: C.green, color: "#fff", border: `2px solid ${C.green}` }}>
+                          對方失誤
+                        </button>
+                      )}
+                      {isDef && (
                         <button onClick={() => { clearInk(); act({ page: "def", skip: true }); }}
                           style={{ ...btn, flex: 1, padding: "12px 0", fontSize: 15, fontWeight: 700, color: C.muted }}>
                           跳過
@@ -1705,7 +1764,7 @@ export default function RotationBoard() {
                 </div>
                 {SCENES.map((s, i) => {
                   const gap = i === 2 ? SHEET_GAP : 0;
-                  const fm = formation(lineup, r, s.id, anchors, roleMap, recvMode);
+                  const fm = formation(lineup, r, s.id, anchors, recvMode, pri);
                   if (!fm.ok)
                     return (
                       <div key={s.id} style={{ width: 100, marginLeft: gap, padding: "0 2px" }}>
@@ -1824,7 +1883,7 @@ export default function RotationBoard() {
 
       {/* 放大 */}
       {zoom && (() => {
-        const fm = formation(lineup, zoom.r, zoom.scene.id, anchors, roleMap, recvMode);
+        const fm = formation(lineup, zoom.r, zoom.scene.id, anchors, recvMode, pri);
         const viol = fm.ok && zoom.scene.id === "recv" ? checkLegal(fm.spots) : [];
         return (
           <div onClick={() => setZoom(null)} className="fixed inset-0 flex items-center justify-center"
