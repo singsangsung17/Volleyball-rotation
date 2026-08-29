@@ -54,6 +54,8 @@ const DEFAULT_ANCHORS = {
     },
   },
 };
+// 跑位目標位（目前介面未使用，保留結構讓已拖曳過的座標不會在載入時被丟掉）
+DEFAULT_ANCHORS.move = JSON.parse(JSON.stringify(DEFAULT_ANCHORS.recv));
 
 const DEF_MAP = { d1: "R", d2: "C", d3: "L" };
 
@@ -146,36 +148,129 @@ function formation(lineup, r, sceneId, A, roleMap, recvMode) {
     };
   }
 
-  const serve = sceneId === "serve";
+  // atk＝攻擊模式：跟發球同一組平行陣，只是發球者已經補位進場
+  const serve = sceneId === "serve" || sceneId === "atk";
   const set = serve ? SERVE_GRID : A.def[frontVariant(occ)][DEF_MAP[sceneId]];
   const f = frontByRole(occ, set);
   if (f.err) return { ok: false, reason: f.err };
   const spots = [...f.spots];
   backOrder(occ, roleMap).forEach((b, i) => {
-    const xy = serve && b.pos === 1 ? SERVE_GRID.SV : set[["BL", "BC", "BR"][i]];
-    spots.push({ ...b, xy, lib: liberoIn(b.e, b.pos, serve) });
+    const k = ["BL", "BC", "BR"][i];
+    const xy = sceneId === "serve" && b.pos === 1 ? SERVE_GRID.SV : set[k];
+    spots.push({ ...b, xy, slot: k, lib: liberoIn(b.e, b.pos, serve) });
   });
   return { ok: true, spots };
 }
 
 // 位置錯誤檢查（僅接發：擊球瞬間的相對順序）
 function checkLegal(spots) {
-  const at = {};
-  spots.forEach((s) => (at[s.pos] = s.xy));
+  const at = {}, who = {};
+  spots.forEach((s) => { at[s.pos] = s.xy; who[s.pos] = (s.e && s.e.name) || "？"; });
   const bad = [];
-  const fb = (f, b) => { if (at[f][1] >= at[b][1]) bad.push(`${f}號位未在${b}號位前方`); };
+  const nm = (p) => `${who[p]}（${p}號位）`;
+  const fb = (f, b) => { if (at[f][1] >= at[b][1]) bad.push(`${nm(f)} 站得比 ${nm(b)} 還後面`); };
   fb(4, 5); fb(3, 6); fb(2, 1);
-  const lr = (l, rr) => { if (at[l][0] >= at[rr][0]) bad.push(`${l}號位未在${rr}號位左側`); };
+  const lr = (l, r) => { if (at[l][0] >= at[r][0]) bad.push(`${nm(l)} 站得比 ${nm(r)} 還右邊`); };
   lr(4, 3); lr(3, 2); lr(5, 6); lr(6, 1);
   return bad;
+}
+
+/* ============================================================
+   比賽追蹤：純狀態轉移，與畫面無關
+   一局 25 分，24 平之後要領先 2 分。
+   輪轉只在 side-out 發生：我方在「沒有發球權」的狀態下得分才轉一格。
+   ============================================================ */
+/* 手勢辨識：一筆畫分辨三種記號（座標為球場正規化座標，y 往底線遞增）
+   圈＝繞回起點附近；勾＝一個明顯轉折且終點比起點高；斜線＝夠直的一筆
+   認不出來時回傳 null，交給畫面上的按鈕手動指定 */
+function recognize(pts) {
+  if (!pts || pts.length < 4) return null;
+  const d = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+  let path = 0;
+  for (let i = 1; i < pts.length; i++) path += d(pts[i - 1], pts[i]);
+  const xs = pts.map((q) => q[0]), ys = pts.map((q) => q[1]);
+  const size = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+  if (size < 0.05 || path < 0.1) return null; // 太小，當成誤觸
+  const A = pts[0], B = pts[pts.length - 1];
+  const chord = d(A, B);
+  // 累積轉向角：圈接近 360°，勾只有一個轉折，直線幾乎為 0
+  let turn = 0;
+  for (let i = 2; i < pts.length; i++) {
+    const a1 = Math.atan2(pts[i - 1][1] - pts[i - 2][1], pts[i - 1][0] - pts[i - 2][0]);
+    const a2 = Math.atan2(pts[i][1] - pts[i - 1][1], pts[i][0] - pts[i - 1][0]);
+    let dd = a2 - a1;
+    while (dd > Math.PI) dd -= 2 * Math.PI;
+    while (dd < -Math.PI) dd += 2 * Math.PI;
+    turn += dd;
+  }
+  if (Math.abs(turn) > 4.4) return "o";                     // 圈（畫不滿也算）
+  if (chord / size < 0.45 && path / size > 2.2) return "o"; // 圈（有閉合）
+  const cl = Math.max(chord, 1e-6);
+  let maxPerp = 0, corner = null;
+  for (const q of pts) {
+    const t = Math.abs((B[0] - A[0]) * (A[1] - q[1]) - (A[0] - q[0]) * (B[1] - A[1])) / cl;
+    if (t > maxPerp) { maxPerp = t; corner = q; }
+  }
+  if (maxPerp / cl > 0.22 && corner && corner[1] > A[1] && corner[1] > B[1] && B[1] < A[1]) return "v"; // 勾
+  if (chord / path > 0.75) return "x"; // 斜線
+  return null;
+}
+
+const SET_TARGET = 25;
+const setWinner = (us, them) => {
+  const done = (a, b) => a >= SET_TARGET && a - b >= 2;
+  return done(us, them) ? "us" : done(them, us) ? "them" : null;
+};
+
+// 回傳新的比賽狀態；action = { page, kind, ... }
+function applyAction(m, act) {
+  const n = { ...m, marks: [...m.marks], rallies: [...m.rallies] };
+  const winRally = () => {
+    n.us += 1;
+    if (!n.serving) { n.rot = (n.rot + 1) % 6; n.serving = true; n.serveCount = 0; } // side-out
+  };
+  const loseRally = () => { n.them += 1; if (n.serving) { n.serving = false; n.serveCount = 0; } };
+  const endRally = (won) => {
+    n.rallies.push({ rot: m.rot, serving: m.serving, serverId: m.serverId, serveCount: m.serveCount, marks: n.marks, won });
+    n.marks = [];
+    n.serverId = null;
+  };
+
+  if (act.page === "serve") {
+    n.serveCount = m.serveCount + 1;
+    n.serverId = act.serverId;
+    if (act.kind === "miss") { loseRally(); endRally(false); n.page = "recv"; }
+    else n.page = "def";
+  } else if (act.kind === "ace") {
+    // Ace 在防守頁按下：對方完全沒碰到球。發球數已在發球頁計過，這裡只加分
+    winRally(); endRally(true); n.page = "serve";
+  } else if (act.skip) {
+    n.page = "atk"; // 防守跳過：不留記號，直接進攻擊模式
+  } else {
+    n.marks.push(act.mark);
+    if (act.page === "def") {
+      if (act.mark.kind === "o") n.page = "atk";
+      else { loseRally(); endRally(false); n.page = "recv"; }
+    } else if (act.page === "recv") {
+      if (act.mark.kind === "o") n.page = "atk";
+      else { loseRally(); endRally(false); n.page = "recv"; }
+    } else if (act.page === "atk") {
+      if (act.mark.kind === "o") n.page = "def";
+      else if (act.mark.kind === "v") { winRally(); endRally(true); n.page = "serve"; }
+      else { loseRally(); endRally(false); n.page = "recv"; }
+    }
+  }
+  n.winner = setWinner(n.us, n.them);
+  if (n.winner) n.page = "done";
+  return n;
 }
 
 const SCENES = [
   { id: "serve", label: "發球" },
   { id: "recv", label: "接發" },
-  { id: "d3", label: "副攻攻擊", ball: true }, // DEF_MAP.d3 = L
+  { id: "d3", label: "左邊攻擊", ball: true }, // DEF_MAP.d3 = L
   { id: "d2", label: "中間攻擊", ball: true },
-  { id: "d1", label: "大砲攻擊", ball: true },
+  { id: "d1", label: "右邊攻擊", ball: true },
 ];
 const ZONE_NAME = { 1: "右後・先發球", 2: "右前", 3: "中前", 4: "左前", 5: "左後", 6: "中後" };
 
@@ -185,7 +280,7 @@ const ZONE_NAME = { 1: "右後・先發球", 2: "右前", 3: "中前", 4: "左�
 const C = {
   paper: "#E7E3D9", dot: "#C6C0B0", court: "#DAB596", courtDeep: "#CDA889",
   line: "#F6F1E8", ink: "#221D17", red: "#C4402B", blue: "#4C9FD4",
-  panel: "#FBF9F5", edge: "#D8D2C4", muted: "#7B7365", warn: "#B5552F",
+  panel: "#FBF9F5", edge: "#D8D2C4", muted: "#7B7365", warn: "#B5552F", green: "#4F8A3F",
 };
 const FONT = '"Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif';
 const MONO = 'ui-monospace,Menlo,monospace';
@@ -195,7 +290,7 @@ const BALL_X = { L: 0.12, C: 0.5, R: 0.88 };
 const toPx = (x) => x * 100;
 const toPy = (y) => 30 + y * 100;
 const STORAGE_KEY = "volley-squad-v1";
-const STORAGE_V = 8; // 每次改變存檔結構就 +1，並在 MIGRATIONS 補一步
+const STORAGE_V = 11; // 每次改變存檔結構就 +1，並在 MIGRATIONS 補一步
 
 /* ---- 存檔位置 ----------------------------------------------------------
    Claude 內建環境有 window.storage（每位使用者各自一份，預設 shared=false）。
@@ -258,22 +353,31 @@ const MIGRATIONS = {
     });
     return { ...d, anchors: { ...d.anchors, def: { ...def, A } } };
   },
+  // v8 → v9：預設團隊「小巨人」。舊存檔存著空的團隊清單會蓋掉預設值，
+  // 這一步只在清單為空時補上，之後使用者刪掉就是刪掉，不會再長回來
+  8: (d) => ({ ...d, teams: d.teams && d.teams.length ? d.teams : DEFAULT_TEAMS }),
+  // v9 → v10：新增「跑位目標位」座標（介面已移除，資料仍保留）
+  9: (d) => ({ ...d, anchors: d.anchors ? normalizeAnchors(d.anchors) : d.anchors }),
+  // v10 → v11：新增比賽追蹤
+  10: (d) => ({ ...d, match: null }),
   // 下次改結構時照這個形狀往下加：
-  // 8: (d) => ({ ...d, 新欄位: 預設值 }),
+  // 11: (d) => ({ ...d, 新欄位: 預設值 }),
 };
 
 // 只收正規點位，順手丟掉早期版本殘留的鍵（例如已廢除的 FA）
 function normalizeAnchors(raw) {
-  const out = { recv: { R5: {}, R4: {} }, def: { M: {}, A: {} } };
-  const rawRecv = (raw && raw.recv) || {};
-  const flatRecv = !!rawRecv.P2; // 舊格式：recv 直接是 {P2,P3,P4}
-  ["R5", "R4"].forEach((m) => {
-    out.recv[m] = {};
-    ["P2", "P3", "P4"].forEach((k) => {
-      const base = DEFAULT_ANCHORS.recv[m][k];
-      const src = (flatRecv ? rawRecv[k] : (rawRecv[m] || {})[k]) || {};
-      out.recv[m][k] = {};
-      Object.keys(base).forEach((pt) => { out.recv[m][k][pt] = src[pt] || base[pt]; });
+  const out = { recv: { R5: {}, R4: {} }, move: { R5: {}, R4: {} }, def: { M: {}, A: {} } };
+  ["recv", "move"].forEach((grp) => {
+    const rawGrp = (raw && raw[grp]) || {};
+    const flat = !!rawGrp.P2; // 舊格式：recv 直接是 {P2,P3,P4}
+    ["R5", "R4"].forEach((m) => {
+      out[grp][m] = {};
+      ["P2", "P3", "P4"].forEach((k) => {
+        const base = DEFAULT_ANCHORS[grp][m][k];
+        const src = (flat ? rawGrp[k] : (rawGrp[m] || {})[k]) || {};
+        out[grp][m][k] = {};
+        Object.keys(base).forEach((pt) => { out[grp][m][k][pt] = src[pt] || base[pt]; });
+      });
     });
   });
   const rawDef = (raw && raw.def) || {};
@@ -314,11 +418,35 @@ function upgradeSave(raw) {
   return d.v > STORAGE_V ? null : d;
 }
 
-function Court({ spots, ball, size = 96, svgRef, onDown, labels, flag, byRole }) {
+function Court({ spots, ball, size = 96, fluid, svgRef, onDown, labels, flag, byRole, marks, onCourtTap, dimSlots, ink, onInk }) {
+  const toCourt = (ev, el) => {
+    const r = el.getBoundingClientRect();
+    return [(ev.clientX - r.left) / r.width, (((ev.clientY - r.top) / r.height) * VB_H - 30) / 100];
+  };
+  const tap = (ev) => {
+    if (!onCourtTap) return;
+    const r = ev.currentTarget.getBoundingClientRect();
+    const nx = (ev.clientX - r.left) / r.width;
+    const ny = (((ev.clientY - r.top) / r.height) * VB_H - 30) / 100;
+    onCourtTap(nx, ny);
+  };
   const r = size > 150 ? 7 : 9;
   return (
-    <svg ref={svgRef} viewBox={`0 0 100 ${VB_H}`} width={size} height={(size * VB_H) / 100}
-      style={{ display: "block", touchAction: onDown ? "none" : "auto" }}>
+    <svg ref={svgRef} viewBox={`0 0 100 ${VB_H}`} width={fluid ? undefined : size} height={fluid ? undefined : (size * VB_H) / 100}
+      onClick={onCourtTap ? tap : undefined}
+      onPointerDown={onInk ? (ev) => {
+        ev.preventDefault();
+        if (ev.currentTarget.setPointerCapture) ev.currentTarget.setPointerCapture(ev.pointerId);
+        onInk("start", toCourt(ev, ev.currentTarget));
+      } : undefined}
+      onPointerMove={onInk ? (ev) => onInk("move", toCourt(ev, ev.currentTarget)) : undefined}
+      onPointerUp={onInk ? () => onInk("end") : undefined}
+      onPointerCancel={onInk ? () => onInk("end") : undefined}
+      style={{
+        display: "block", width: fluid ? "100%" : undefined, height: fluid ? "auto" : undefined,
+        touchAction: onDown || onInk ? "none" : "auto",
+        cursor: onCourtTap || onInk ? "crosshair" : "default",
+      }}>
       <rect x="0" y="0" width="100" height="130" rx="4" fill={C.court} />
       <rect x="0" y="0" width="100" height="30" fill={C.courtDeep} opacity="0.45" />
       <line x1="0" y1="30" x2="100" y2="30" stroke={C.line} strokeWidth="1.6" />
@@ -326,13 +454,31 @@ function Court({ spots, ball, size = 96, svgRef, onDown, labels, flag, byRole })
       <rect x="1" y="1" width="98" height="128" rx="3" fill="none" stroke={flag ? C.warn : C.line}
         strokeWidth={flag ? 2.2 : 0.9} opacity={flag ? 1 : 0.7} />
       {ball && <circle cx={toPx(BALL_X[ball])} cy="14" r="4.5" fill={C.blue} />}
+      {ink && ink.length > 1 && (
+        <polyline fill="none" stroke={C.ink} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+          opacity="0.75" points={ink.map((q) => `${toPx(q[0])},${toPy(q[1])}`).join(" ")} />
+      )}
+      {marks && marks.map((m, i) => {
+        const cx = toPx(m.x), cy = toPy(m.y);
+        const col = m.kind === "x" ? C.red : m.kind === "v" ? C.green : C.blue;
+        return (
+          <g key={`mk${i}`} stroke={col} strokeWidth="1.8" fill="none" strokeLinecap="round">
+            {m.kind === "o" && <circle cx={cx} cy={cy} r="6" />}
+            {m.kind === "x" && <><line x1={cx - 5} y1={cy - 5} x2={cx + 5} y2={cy + 5} />
+              <line x1={cx + 5} y1={cy - 5} x2={cx - 5} y2={cy + 5} /></>}
+            {m.kind === "v" && <path d={`M${cx - 5} ${cy} L${cx - 1} ${cy + 4} L${cx + 6} ${cy - 5}`} />}
+          </g>
+        );
+      })}
       {spots.map((s, i) => {
         const isFrontSetter = s.e && s.e.role === "舉球" && FRONT.includes(s.pos);
         const label = labels
           ? (s.label || s.key)
           : s.lib ? "L" : byRole ? (ROLE_ABBR[s.e.role] || "？") : s.e.name;
+        const dimmed = dimSlots && s.slot && dimSlots.includes(s.slot);
         return (
           <g key={s.key || (s.e && s.e.id) || i}
+            opacity={dimmed ? 0.3 : 1}
             onPointerDown={onDown ? (ev) => onDown(ev, s.key) : undefined}
             style={{ cursor: onDown ? "grab" : "default" }}>
             <circle cx={toPx(s.xy[0])} cy={toPy(s.xy[1])} r={labels ? r + 1 : r}
@@ -522,6 +668,9 @@ export default function RotationBoard() {
   const [pngUrl, setPngUrl] = useState(null);
   const [pngBusy, setPngBusy] = useState(false);
   const [showRole, setShowRole] = useState(false);
+  const [match, setMatch] = useState(null);
+  const [hist, setHist] = useState([]);
+  const [ink, setInk] = useState(null); // { dir, pts } 目前這一筆
 
   const [editKey, setEditKey] = useState("recv.R5.P2");
   const [drag, setDrag] = useState(null);
@@ -564,6 +713,7 @@ export default function RotationBoard() {
           if (d.anchors && d.anchors.recv && d.anchors.def) setAnchors(normalizeAnchors(d.anchors));
           if (d.roleMap) setRoleMap(d.roleMap);
           if (d.recvMode) setRecvMode(d.recvMode);
+          if (d.match) setMatch(d.match);
         }
       } catch { /* 尚未儲存過，用預設值 */ }
       readyRef.current = true;
@@ -574,15 +724,15 @@ export default function RotationBoard() {
     if (!readyRef.current) return;
     const t = setTimeout(() => {
       try {
-        store.set(STORAGE_KEY, JSON.stringify({ v: STORAGE_V, teams, activeId, anchors, roleMap, recvMode })).catch(() => {});
+        store.set(STORAGE_KEY, JSON.stringify({ v: STORAGE_V, teams, activeId, anchors, roleMap, recvMode, match })).catch(() => {});
       } catch { /* 儲存失敗不影響操作 */ }
     }, 900);
     return () => clearTimeout(t);
-  }, [teams, activeId, anchors, roleMap, recvMode]);
+  }, [teams, activeId, anchors, roleMap, recvMode, match]);
   const save = async () => {
     setSaveState("saving");
     try {
-      const r = await store.set(STORAGE_KEY, JSON.stringify({ v: STORAGE_V, teams, activeId, anchors, roleMap, recvMode }));
+      const r = await store.set(STORAGE_KEY, JSON.stringify({ v: STORAGE_V, teams, activeId, anchors, roleMap, recvMode, match }));
       setSaveState(r ? "saved" : "error");
     } catch { setSaveState("error"); }
     setTimeout(() => setSaveState(""), 1800);
@@ -603,12 +753,49 @@ export default function RotationBoard() {
       const fm = formation(lineup, r, "recv", anchors);
       if (!fm.ok) continue;
       const bad = checkLegal(fm.spots);
-      if (bad.length) out.push(`R${r + 1} 接發：${bad[0]}`);
+      if (bad.length) out.push(`第 ${r + 1} 輪接發：${bad[0]}`);
     }
     return out;
   }, [lineup, anchors, recvMode]);
 
   const clashes = useMemo(() => backConflicts(lineup, roleMap), [lineup, roleMap]);
+
+  /* ---- 比賽追蹤 ---- */
+  const mLineup = useMemo(
+    () => (match ? match.court.map((id) => byId[id]) : []),
+    [match, byId]
+  );
+  const mReady = mLineup.length === 6 && mLineup.every(Boolean);
+  const mForm = (scene) => (mReady ? formation(mLineup, match.rot, scene, anchors, roleMap, recvMode) : { ok: false, reason: "名單有異動" });
+  const server = mReady ? occupancy(mLineup, match.rot)[1] : null;
+
+  const startMatch = (weServe) => {
+    setHist([]);
+    setMatch({
+      court: [...court], us: 0, them: 0, rot: 0, serving: weServe, serveCount: 0,
+      serverId: null, page: weServe ? "serve" : "recv", marks: [], rallies: [], winner: null,
+    });
+  };
+  const act = (a) => {
+    setHist((H) => [...H.slice(-40), match]);
+    setMatch((m) => applyAction(m, a));
+    setInk(null);
+  };
+  const undo = () => {
+    if (!hist.length) return;
+    setMatch(hist[hist.length - 1]);
+    setHist((H) => H.slice(0, -1));
+  };
+  const clearInk = () => setInk(null);
+  // 落點換算成「座標＋最近的球員」
+  const markAt = (spots, x, y, kind, dir) => {
+    let best = null, bd = Infinity;
+    spots.forEach((s) => {
+      const d = Math.hypot(s.xy[0] - x, s.xy[1] - y);
+      if (d < bd) { bd = d; best = s; }
+    });
+    return { kind, x, y, dir: dir || null, playerId: best ? best.e.id : null, dist: +bd.toFixed(3) };
+  };
 
   const setMember = (id, patch) =>
     setRoster((R) => R.map((e) => (e.id === id ? { ...e, ...patch } : e)));
@@ -839,12 +1026,12 @@ export default function RotationBoard() {
     { key: `recv.${recvMode}.P2`, label: "舉球在2號位", get: (A) => (A.recv[recvMode] || A.recv.R5).P2, ball: null },
     { key: `recv.${recvMode}.P3`, label: "舉球在3號位", get: (A) => (A.recv[recvMode] || A.recv.R5).P3, ball: null },
     { key: `recv.${recvMode}.P4`, label: "舉球在4號位", get: (A) => (A.recv[recvMode] || A.recv.R5).P4, ball: null },
-    { key: "def.A.L", label: "副攻攻擊", get: (A) => A.def.A.L, ball: "L" },
+    { key: "def.A.L", label: "左邊攻擊", get: (A) => A.def.A.L, ball: "L" },
     { key: "def.A.C", label: "中間攻擊", get: (A) => A.def.A.C, ball: "C" },
-    { key: "def.A.R", label: "大砲攻擊", get: (A) => A.def.A.R, ball: "R" },
-    { key: "def.M.L", label: "副攻攻擊", get: (A) => A.def.M.L, ball: "L" },
+    { key: "def.A.R", label: "右邊攻擊", get: (A) => A.def.A.R, ball: "R" },
+    { key: "def.M.L", label: "左邊攻擊", get: (A) => A.def.M.L, ball: "L" },
     { key: "def.M.C", label: "中間攻擊", get: (A) => A.def.M.C, ball: "C" },
-    { key: "def.M.R", label: "大砲攻擊", get: (A) => A.def.M.R, ball: "R" },
+    { key: "def.M.R", label: "右邊攻擊", get: (A) => A.def.M.R, ball: "R" },
   ];
   const cur = EDIT_SETS.find((s) => s.key === editKey) || EDIT_SETS[0];
   const curKey = cur.key; // editKey 可能過期，實際生效的是這個
@@ -917,7 +1104,7 @@ export default function RotationBoard() {
         {team && (
           <div className="flex gap-1 flex-wrap justify-end">
             <button onClick={() => { setActiveId(null); setSelZone(null); }} style={btn}>切換團隊</button>
-            {[["setup", "① 名單"], ["sheet", "② 全圖"], ["anchor", "③ 定點"]].map(([k, l]) => (
+            {[["setup", "① 名單"], ["match", "② 比賽"], ["sheet", "③ 全圖"], ["anchor", "④ 定點"]].map(([k, l]) => (
               <button key={k} onClick={() => setTab(k)}
                 style={{ ...btn, background: tab === k ? C.ink : C.panel, color: tab === k ? C.paper : C.ink }}>
                 {l}
@@ -1010,9 +1197,14 @@ export default function RotationBoard() {
       {team && issues.length > 0 && (
         <div className="no-print" style={{ ...card, borderColor: C.warn, marginBottom: 8, padding: 9 }}>
           <div style={{ fontSize: 12, color: C.warn, fontWeight: 700 }}>
-            位置錯誤 {issues.length} 處（接發擊球瞬間重疊）
+            位置錯誤 {issues.length} 處
           </div>
-          <div style={{ fontSize: 11, color: C.muted, marginTop: 3 }}>{issues.slice(0, 3).join("　/　")}</div>
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 3, lineHeight: 1.8 }}>
+            {issues.slice(0, 3).map((t) => <div key={t}>{t}</div>)}
+            <div style={{ marginTop: 3 }}>
+              判定只看<b>發球員擊球那一瞬間</b>；球一離手就可以自由跑位。
+            </div>
+          </div>
         </div>
       )}
 
@@ -1228,6 +1420,191 @@ export default function RotationBoard() {
         </div>
       )}
 
+      {/* ② 比賽 */}
+      {team && tab === "match" && (
+        <div>
+          {!match && (
+            <div style={card}>
+              <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 6 }}>開始記錄</div>
+              <div style={{ fontSize: 11, color: C.muted, marginBottom: 10, lineHeight: 1.8 }}>
+                一局 25 分，24 平之後要領先 2 分。輪轉由程式自動處理——只有在我方接發時得分才會轉一格。
+              </div>
+              {court.some((id) => !id) ? (
+                <div style={{ fontSize: 12, color: C.warn }}>場上還沒滿 6 人，先到①名單排好陣容。</div>
+              ) : (
+                <div className="flex gap-2">
+                  <button onClick={() => startMatch(true)} style={{ ...btn, background: C.ink, color: C.paper, fontWeight: 700 }}>先發球</button>
+                  <button onClick={() => startMatch(false)} style={{ ...btn, fontWeight: 700 }}>先接發球</button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {match && (
+            <div style={card}>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-baseline gap-2">
+                  <span style={{ fontSize: 26, fontWeight: 800, fontFamily: MONO }}>
+                    {match.us}<span style={{ color: C.muted, margin: "0 4px" }}>:</span>{match.them}
+                  </span>
+                  <span style={{ fontSize: 11, color: C.muted }}>
+                    R{match.rot + 1}・{match.serving ? "我方發球" : "對方發球"}
+                  </span>
+                  {match.serving && (
+                    <span style={{
+                      fontSize: 11, fontWeight: 700, color: C.paper, background: C.ink,
+                      borderRadius: 6, padding: "2px 7px",
+                    }}>
+                      連續發球 {match.serveCount}
+                    </span>
+                  )}
+                </div>
+                <div className="flex gap-1">
+                  <button onClick={undo} disabled={!hist.length}
+                    style={{ ...btn, padding: "4px 9px", opacity: hist.length ? 1 : 0.4 }}>← 上一步</button>
+                  <button onClick={() => { setMatch(null); setHist([]); }}
+                    style={{ ...btn, padding: "4px 9px", color: C.warn }}>結束</button>
+                </div>
+              </div>
+
+              {!mReady && (
+                <div style={{ fontSize: 12, color: C.warn }}>名單有異動，這場記錄無法繼續。請按「結束」重開一場。</div>
+              )}
+
+              {mReady && match.page === "done" && (
+                <div>
+                  <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 4 }}>
+                    {match.winner === "us" ? "我方獲勝" : "對方獲勝"}
+                  </div>
+                  <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.9 }}>
+                    共 {match.rallies.length} 球。按「結束」回到名單頁重排陣容，再開下一局。
+                  </div>
+                </div>
+              )}
+
+              {mReady && match.page === "serve" && (() => {
+                const fm = mForm("serve");
+                return (
+                  <div>
+                    <div style={{ fontSize: 13, marginBottom: 6 }}>
+                      發球員：<b>{server ? server.name || "？" : "？"}</b>
+                      <span style={{ fontSize: 11, color: C.muted, marginLeft: 8 }}>本輪已發 {match.serveCount} 球</span>
+                    </div>
+                    <div style={{ maxWidth: 300, margin: "0 auto" }}>
+                      {fm.ok ? <Court spots={fm.spots} fluid /> : <div style={{ fontSize: 12, color: C.warn }}>{fm.reason}</div>}
+                    </div>
+                    <div className="flex gap-2 mt-3">
+                      <button onClick={() => act({ page: "serve", kind: "in", serverId: server.id })}
+                        style={{ ...btn, flex: 1, fontSize: 15, fontWeight: 800, padding: "12px 0", background: C.green, color: "#fff", border: `2px solid ${C.green}` }}>成功</button>
+                      <button onClick={() => act({ page: "serve", kind: "miss", serverId: server.id })}
+                        style={{ ...btn, flex: 1, fontSize: 15, fontWeight: 800, padding: "12px 0", color: C.red, border: `2px solid ${C.red}` }}>失誤</button>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {mReady && (match.page === "def" || match.page === "recv" || match.page === "atk") && (() => {
+                const isDef = match.page === "def";
+                const isAtk = match.page === "atk";
+                const kinds = isAtk
+                  ? [["o", "過網", C.blue], ["v", "得分", C.green], ["x", "失誤", C.red]]
+                  : [["o", "接起", C.blue], ["x", "失誤", C.red]];
+                const title = isDef ? "對方進攻，在圖上畫記號" : isAtk ? "我方進攻，畫在該攻擊手身上" : "對方發球，在圖上畫記號";
+                const commit = (kind) => {
+                  if (!ink || ink.pts.length < 2) return;
+                  const xs = ink.pts.map((q) => q[0]), ys = ink.pts.map((q) => q[1]);
+                  const cx = xs.reduce((a, b) => a + b, 0) / xs.length;
+                  const cy = ys.reduce((a, b) => a + b, 0) / ys.length;
+                  const fm = mForm(isAtk ? "atk" : isDef ? (ink.dir === "L" ? "d3" : ink.dir === "C" ? "d2" : "d1") : "recv");
+                  if (!fm.ok) { clearInk(); return; }
+                  const mk = markAt(fm.spots, cx, cy, kind, ink.dir);
+                  clearInk();
+                  if (isAtk && mk.dist > 0.16) return; // 攻擊模式必須畫在球員身上
+                  act({ page: match.page, mark: mk });
+                };
+                const inkHandler = (dir) => (phase, pt) => {
+                  if (phase === "start") setInk({ dir, pts: [pt] });
+                  else if (phase === "move") setInk((k) => (k && k.dir === dir ? { ...k, pts: [...k.pts, pt] } : k));
+                  else if (ink && ink.pts.length > 1) {
+                    const g = recognize(ink.pts);
+                    if (g) commit(g); // 認出來就直接送出；認不出來留著墨跡等手動指定
+                  }
+                };
+                const dirs = [["L", "對手大砲"], ["C", "中間"], ["R", "副攻"]];
+                const guess = ink ? recognize(ink.pts) : null;
+                return (
+                  <div>
+                    <div style={{ fontSize: 12, marginBottom: 6 }}>{title}</div>
+                    {isDef ? (
+                      <div className="flex gap-1" style={{ alignItems: "flex-start" }}>
+                        {dirs.map(([d, l]) => {
+                          const fm = mForm(d === "L" ? "d3" : d === "C" ? "d2" : "d1");
+                          return (
+                            <div key={d} style={{ flex: "1 1 0", minWidth: 0 }}>
+                              <div style={{ fontSize: 10.5, color: C.muted, textAlign: "center", marginBottom: 2 }}>{l}</div>
+                              {fm.ok ? (
+                                <Court spots={fm.spots} fluid ball={d}
+                                  ink={ink && ink.dir === d ? ink.pts : null} onInk={inkHandler(d)} />
+                              ) : <div style={{ fontSize: 10, color: C.warn }}>{fm.reason}</div>}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (() => {
+                      const fm = mForm(isAtk ? "atk" : "recv");
+                      return (
+                        <div style={{ maxWidth: 320, margin: "0 auto" }}>
+                          {fm.ok ? (
+                            <Court spots={fm.spots} fluid dimSlots={isAtk ? ["BL", "BR"] : null}
+                              ink={ink ? ink.pts : null} onInk={inkHandler(null)} />
+                          ) : <div style={{ fontSize: 12, color: C.warn }}>{fm.reason}</div>}
+                        </div>
+                      );
+                    })()}
+
+                    {ink && !guess && (
+                      <div style={{ fontSize: 12, color: C.warn, marginTop: 8 }}>
+                        看不出畫的是什麼，直接按下面的按鈕指定。
+                      </div>
+                    )}
+                    <div className="flex gap-2" style={{ marginTop: 10 }}>
+                      {kinds.map(([k, l, col]) => (
+                        <button key={k} onClick={() => commit(k)} disabled={!ink}
+                          style={{
+                            ...btn, flex: 1, padding: "12px 0", fontSize: 15, fontWeight: 800,
+                            background: C.panel, color: col, border: `2px solid ${col}`,
+                            opacity: ink ? 1 : 0.35,
+                          }}>
+                          {k === "o" ? "○" : k === "x" ? "✕" : "✓"} {l}
+                        </button>
+                      ))}
+                      {isDef && match.serving && match.marks.length === 0 && (
+                        <button onClick={() => { clearInk(); act({ page: "def", kind: "ace" }); }}
+                          style={{ ...btn, flex: 1, padding: "12px 0", fontSize: 15, fontWeight: 800, background: C.ink, color: C.paper }}>
+                          Ace
+                        </button>
+                      )}
+                      {isDef && (
+                        <button onClick={() => { clearInk(); act({ page: "def", skip: true }); }}
+                          style={{ ...btn, flex: 1, padding: "12px 0", fontSize: 15, fontWeight: 700, color: C.muted }}>
+                          跳過
+                        </button>
+                      )}
+                    </div>
+                    <div style={{ fontSize: 10.5, color: C.muted, marginTop: 6, lineHeight: 1.9 }}>
+                      直接在球場上畫：<b style={{ color: C.blue }}>畫圈</b>＝接起／過網、
+                      <b style={{ color: C.red }}>畫一條斜線</b>＝失誤{isAtk && <>、<b style={{ color: C.green }}>畫勾</b>＝得分</>}。
+                      {isDef && " 畫在三張圖的哪一張，等於記下對方的攻擊方向。"}
+                      {isAtk && " 記號要畫在球員身上。"}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ② 全圖 */}
       {team && tab === "sheet" && (
         <>
@@ -1349,7 +1726,8 @@ export default function RotationBoard() {
               svgRef={svgRef} onDown={(e, k) => { e.preventDefault(); setDrag(k); }} />
           </div>
           <div style={{ fontSize: 11, color: C.muted, marginTop: 8, lineHeight: 1.7 }}>
-            接發的點是 1–6號位，4人／5人各一套；4人接發時把不接的那兩位拖到網前即可。防守分兩套：<b>砲背</b>＝前排有副攻、<b>砲中</b>＝前排有攔中
+            接發的點是 1–6號位，4人／5人各一套；4人接發時把不接的那兩位拖到網前即可。
+            防守分兩套：<b>砲背</b>＝前排有副攻、<b>砲中</b>＝前排有攔中
             （兩者互為對角，每輪只會出現一個）。前排三點：
             砲中＝砲（左）・中（中）・舉（右）；砲背＝砲（左）・<b>舉（中）</b>・<b>背（右）</b>；
             後排點按照基本輪轉順序，除非適用特殊規則。
