@@ -308,6 +308,28 @@ const clock = (ms) => {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 };
 
+// 攻擊表現拆到每個人：誰出手幾次、得幾分，附上每一次的比分與時間
+function attackByPlayer(rallies) {
+  const t = {};
+  let us = 0, them = 0;
+  rallies.forEach((ra) => {
+    if (ra.won) us += 1; else them += 1;
+    (ra.marks || []).forEach((mk) => {
+      if (mk.src !== "atk") return;
+      const id = mk.playerId || "__none";
+      const o = (t[id] = t[id] || { point: 0, over: 0, miss: 0, total: 0, list: [] });
+      if (mk.kind === "v") o.point += 1;
+      else if (mk.kind === "o") o.over += 1;
+      else if (mk.kind === "x") o.miss += 1;
+      o.total += 1;
+      o.list.push({ kind: mk.kind, us, them, rot: ra.rot, at: ra.at, base: ra._base });
+    });
+  });
+  return Object.entries(t)
+    .map(([id, o]) => ({ id, ...o, rate: o.total ? Math.round((o.point / o.total) * 100) : null }))
+    .sort((a, b) => b.total - a.total);
+}
+
 // 攻擊表現：得分／出手數
 function attackOf(rallies) {
   let point = 0, over = 0, miss = 0;
@@ -825,6 +847,8 @@ export default function RotationBoard() {
   const [openCause, setOpenCause] = useState(null);
   const [openRally, setOpenRally] = useState(null);
   const [openBlame, setOpenBlame] = useState(null);
+  const [openAtk, setOpenAtk] = useState(false);
+  const [openAtkWho, setOpenAtkWho] = useState(null);
   const [swapSel, setSwapSel] = useState(null);
   const [hist, setHist] = useState([]);
   const [ink, setInk] = useState(null);         // { dir, pts } 目前這一筆
@@ -2094,8 +2118,12 @@ export default function RotationBoard() {
                 </div>
 
                 <div style={{ ...card, marginBottom: 8 }}>
-                  <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>攻擊表現</div>
-                  <div className="flex items-baseline gap-3">
+                  <div className="flex items-center justify-between" style={{ cursor: "pointer" }}
+                    onClick={() => setOpenAtk((v) => !v)}>
+                    <div style={{ fontSize: 13, fontWeight: 800 }}>攻擊表現</div>
+                    <span style={{ fontSize: 11, color: C.muted }}>{openAtk ? "收合 ▾" : "看每個人 ▸"}</span>
+                  </div>
+                  <div className="flex items-baseline gap-3" style={{ marginTop: 4 }}>
                     <span style={{ fontSize: 22, fontWeight: 800, fontFamily: MONO }}>
                       {atk.point}<span style={{ fontSize: 14, color: C.muted }}>/{atk.total}</span>
                     </span>
@@ -2106,6 +2134,57 @@ export default function RotationBoard() {
                   <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>
                     得分 {atk.point}・過網未得分 {atk.over}・失誤 {atk.miss}（只計有畫記號的出手）
                   </div>
+
+                  {openAtk && (
+                    <div style={{ marginTop: 8 }}>
+                      <div className="flex" style={{ fontSize: 10.5, color: C.muted, paddingBottom: 2 }}>
+                        <span style={{ flex: 1 }}>球員</span>
+                        <span style={{ width: 54, textAlign: "right" }}>得分/出手</span>
+                        <span style={{ width: 46, textAlign: "right" }}>得分率</span>
+                        <span style={{ width: 66, textAlign: "right" }}>過網/失誤</span>
+                      </div>
+                      {attackByPlayer(rallies).length === 0 && (
+                        <div style={{ fontSize: 11, color: C.muted }}>還沒有畫過攻擊記號</div>
+                      )}
+                      {attackByPlayer(rallies).map((a) => {
+                        const on = openAtkWho === a.id;
+                        return (
+                          <div key={a.id} style={{ borderTop: `1px solid ${C.edge}` }}>
+                            <div className="flex items-center" style={{ padding: "4px 0", cursor: "pointer", fontSize: 11.5 }}
+                              onClick={() => setOpenAtkWho(on ? null : a.id)}>
+                              <span style={{ flex: 1, fontWeight: 700 }}>
+                                {a.id === "__none" ? "沒記到是誰" : nameOf(a.id)}
+                                <span style={{ marginLeft: 4, color: C.muted, fontWeight: 400 }}>{on ? "▾" : "▸"}</span>
+                              </span>
+                              <span style={{ width: 54, textAlign: "right", fontFamily: MONO }}>{a.point}/{a.total}</span>
+                              <span style={{ width: 46, textAlign: "right", fontFamily: MONO, fontWeight: 800, color: C.green }}>
+                                {a.rate === null ? "—" : a.rate + "%"}
+                              </span>
+                              <span style={{ width: 66, textAlign: "right", fontFamily: MONO, color: C.muted }}>
+                                {a.over}/{a.miss}
+                              </span>
+                            </div>
+                            {on && (
+                              <div style={{ padding: "0 0 6px 10px", fontFamily: MONO, fontSize: 10.5, color: C.muted, lineHeight: 1.9 }}>
+                                {a.list.map((o, i) => (
+                                  <div key={i}>
+                                    <span style={{ color: o.kind === "v" ? C.green : o.kind === "x" ? C.red : C.blue, fontWeight: 800 }}>
+                                      {o.kind === "v" ? "得分" : o.kind === "x" ? "失誤" : "過網"}
+                                    </span>
+                                    　{o.us}:{o.them}　R{o.rot + 1}
+                                    {o.at && o.base ? `　${clock(o.at - o.base)}` : ""}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                      <div style={{ fontSize: 10.5, color: C.muted, marginTop: 4 }}>
+                        比分是那一球結束後的比分；時間是從開始記錄算起。
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div style={{ ...card, marginBottom: 8 }}>
