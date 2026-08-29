@@ -154,10 +154,11 @@ function frontByRole(occ, set) {
 }
 
 // 自由球員替上：該員輪到後排即替換；但發球那一格由本人發球（自由不能發球）
-const liberoIn = (e, pos, serve) => !!(e && e.libero) && BACK.includes(pos) && !(serve && pos === 1);
+// keepServer＝1號位那位還在場上（他剛發完球，整個回合都留著），自由球員不會替他
+const liberoIn = (e, pos, keepServer) => !!(e && e.libero) && BACK.includes(pos) && !(keepServer && pos === 1);
 
 // 站位解析：{ok, spots:[{pos, e, xy, lib}]} 或 {ok:false, reason}
-function formation(lineup, r, sceneId, A, recvMode, pri, backMode) {
+function formation(lineup, r, sceneId, A, recvMode, pri, backMode, weServe) {
   if (lineup.length !== 6 || lineup.some((e) => !e)) return { ok: false, reason: "名單未滿 6 人" };
   const occ = occupancy(lineup, r);
 
@@ -172,15 +173,21 @@ function formation(lineup, r, sceneId, A, recvMode, pri, backMode) {
   }
 
   // atk＝攻擊模式：跟發球同一組平行陣，只是發球者已經補位進場
-  const serve = sceneId === "serve" || sceneId === "atk";
-  const set = serve ? SERVE_GRID : A.def[frontVariant(occ)][DEF_MAP[sceneId]];
+  const useGrid = sceneId === "serve" || sceneId === "atk";
+  // 發完球的人整個回合都留在場上（發球→防守→攻擊）；要等失分、換對方發球時，
+  // 自由球員才會在接發時替他上場。weServe 沒給時（全圖）一律當成我方發球那條線。
+  const keepServer =
+    sceneId === "serve" ? true
+      : sceneId === "recv" ? false
+        : weServe === undefined ? true : !!weServe;
+  const set = useGrid ? SERVE_GRID : A.def[frontVariant(occ)][DEF_MAP[sceneId]];
   const f = frontByRole(occ, set);
   if (f.err) return { ok: false, reason: f.err };
   const spots = [...f.spots];
-  backOrder(occ, r, pri, backMode, serve).forEach((b, i) => {
+  backOrder(occ, r, pri, backMode, keepServer).forEach((b, i) => {
     const k = ["BL", "BC", "BR"][i];
     const xy = sceneId === "serve" && b.pos === 1 ? SERVE_GRID.SV : set[k];
-    spots.push({ ...b, xy, slot: k, lib: liberoIn(b.e, b.pos, serve) });
+    spots.push({ ...b, xy, slot: k, lib: liberoIn(b.e, b.pos, keepServer) });
   });
   return { ok: true, spots };
 }
@@ -267,6 +274,36 @@ function statsOf(rallies) {
   return { causes, byRot, dir, trend, total: rallies.length, us, them };
 }
 
+// 某個結束原因是誰造成的：發球失誤看發球員，其餘看該球最後一個記號
+function blameOf(rallies, end) {
+  const tally = {};
+  rallies.forEach((ra) => {
+    if (ra.end !== end) return;
+    let id = null;
+    if (end === "serveMiss" || end === "ace") id = ra.serverId; // 發球相關的算在發球員頭上
+    else {
+      const mk = (ra.marks || []).slice(-1)[0];
+      id = mk ? mk.playerId : null;
+    }
+    const key = id || "__none";
+    tally[key] = (tally[key] || 0) + 1;
+  });
+  return Object.entries(tally).sort((a, b) => b[1] - a[1]);
+}
+
+// 攻擊表現：得分／出手數
+function attackOf(rallies) {
+  let point = 0, over = 0, miss = 0;
+  rallies.forEach((ra) => (ra.marks || []).forEach((mk) => {
+    if (mk.src !== "atk") return;
+    if (mk.kind === "v") point += 1;
+    else if (mk.kind === "o") over += 1;
+    else if (mk.kind === "x") miss += 1;
+  }));
+  const total = point + over + miss;
+  return { point, over, miss, total, rate: total ? Math.round((point / total) * 100) : null };
+}
+
 const SET_TARGET = 25;
 const setWinner = (us, them) => {
   const done = (a, b) => a >= SET_TARGET && a - b >= 2;
@@ -283,7 +320,7 @@ function applyAction(m, act) {
   const loseRally = () => { n.them += 1; if (n.serving) { n.serving = false; n.serveCount = 0; } };
   const endRally = (won, end) => {
     n.rallies.push({
-      rot: m.rot, serving: m.serving, serverId: m.serverId, serveCount: m.serveCount,
+      rot: m.rot, serving: m.serving, serverId: n.serverId, serveCount: m.serveCount,
       marks: n.marks, won, end,
     });
     n.marks = [];
@@ -765,6 +802,9 @@ export default function RotationBoard() {
   const [mView, setMView] = useState("live");
   const [statScope, setStatScope] = useState("all");
   const [dropSrc, setDropSrc] = useState("def");
+  const [matchName, setMatchName] = useState("");
+  const [openCause, setOpenCause] = useState(null);
+  const [openRally, setOpenRally] = useState(null);
   const [hist, setHist] = useState([]);
   const [ink, setInk] = useState(null);         // { dir, pts } 目前這一筆
   const [pending, setPending] = useState(null); // 已辨識、正在顯示確認的記號
@@ -874,12 +914,13 @@ export default function RotationBoard() {
     [match, byId]
   );
   const mReady = mLineup.length === 6 && mLineup.every(Boolean);
-  const mForm = (scene) => (mReady ? formation(mLineup, match.rot, scene, anchors, recvMode, pri, backMode) : { ok: false, reason: "名單有異動" });
+  const mForm = (scene) => (mReady ? formation(mLineup, match.rot, scene, anchors, recvMode, pri, backMode, match.serving) : { ok: false, reason: "名單有異動" });
   const server = mReady ? occupancy(mLineup, match.rot)[1] : null;
 
   const startMatch = (weServe) => {
     setHist([]);
     setMatch({
+      name: matchName.trim() || new Date().toLocaleDateString("zh-TW"),
       court: [...court], us: 0, them: 0, rot: 0, serving: weServe, serveCount: 0,
       serverId: null, page: weServe ? "serve" : "recv", marks: [], rallies: [], winner: null,
     });
@@ -896,7 +937,8 @@ export default function RotationBoard() {
     if (match && match.rallies.length) {
       setSets((S) => [...S.slice(-29), {
         at: Date.now(), teamId: activeId, teamName: team ? team.name : "",
-        us: match.us, them: match.them, rallies: match.rallies,
+        name: match.name || "", us: match.us, them: match.them, rallies: match.rallies,
+        names: Object.fromEntries(roster.map((e) => [e.id, e.name || "？"])),
       }]);
     }
     setMatch(null);
@@ -1610,10 +1652,18 @@ export default function RotationBoard() {
               {court.some((id) => !id) ? (
                 <div style={{ fontSize: 12, color: C.warn }}>場上還沒滿 6 人，先到①名單排好陣容。</div>
               ) : (
-                <div className="flex gap-2">
-                  <button onClick={() => startMatch(true)} style={{ ...btn, background: C.ink, color: C.paper, fontWeight: 700 }}>先發球</button>
-                  <button onClick={() => startMatch(false)} style={{ ...btn, fontWeight: 700 }}>先接發球</button>
-                </div>
+                <>
+                  <input value={matchName} onChange={(e) => setMatchName(e.target.value)}
+                    placeholder="比賽名稱（不填就用今天日期）"
+                    style={{
+                      width: "100%", fontFamily: FONT, fontSize: 13, padding: "8px 10px", marginBottom: 8,
+                      borderRadius: 8, border: `1px solid ${C.edge}`, background: "#fff", color: C.ink,
+                    }} />
+                  <div className="flex gap-2">
+                    <button onClick={() => startMatch(true)} style={{ ...btn, background: C.ink, color: C.paper, fontWeight: 700 }}>先發球</button>
+                    <button onClick={() => startMatch(false)} style={{ ...btn, fontWeight: 700 }}>先接發球</button>
+                  </div>
+                </>
               )}
             </div>
           )}
@@ -1626,7 +1676,7 @@ export default function RotationBoard() {
                     {match.us}<span style={{ color: C.muted, margin: "0 4px" }}>:</span>{match.them}
                   </span>
                   <span style={{ fontSize: 11, color: C.muted }}>
-                    R{match.rot + 1}・{match.serving ? "我方發球" : "對方發球"}
+                    {match.name ? match.name + "・" : ""}R{match.rot + 1}・{match.serving ? "我方發球" : "對方發球"}
                   </span>
                   {match.serving && (
                     <span style={{
@@ -1829,90 +1879,147 @@ export default function RotationBoard() {
       )}
 
       {team && tab === "match" && mView === "report" && (() => {
-        const mine = sets.filter((x) => x.teamId === activeId);
-        const pool = statScope === "last" ? mine.slice(-1) : mine;
-        const live = match && match.rallies.length ? [{ at: 0, us: match.us, them: match.them, rallies: match.rallies }] : [];
-        const use = statScope === "live" ? live : pool;
+        const mine = sets.map((x, i) => ({ ...x, _i: i })).filter((x) => x.teamId === activeId);
+        const live = match && match.rallies.length
+          ? [{ _i: -1, name: match.name, us: match.us, them: match.them, rallies: match.rallies, names: null }] : [];
+        const use = statScope === "live" ? live
+          : statScope === "all" ? mine
+            : mine.filter((x) => String(x._i) === statScope);
         const rallies = use.flatMap((x) => x.rallies);
         const st = statsOf(rallies);
+        const atk = attackOf(rallies);
+        const nameOf = (id) => {
+          if (!id) return "未記錄";
+          if (byId[id]) return byId[id].name || "？";
+          const src = use.find((x) => x.names && x.names[id]);
+          return src ? src.names[id] : "已離隊";
+        };
         const bar = (v, max, col) => (
           <div style={{ flex: 1, height: 9, background: C.paper, borderRadius: 5, overflow: "hidden" }}>
             <div style={{ width: `${max ? (v / max) * 100 : 0}%`, height: "100%", background: col }} />
           </div>
         );
-        const pct = (a, b) => (b ? Math.round((a / b) * 100) + "%" : "—");
+        const pct = (x, y) => (y ? Math.round((x / y) * 100) + "%" : "—");
         const winMax = Math.max(1, ...WIN_ENDS.map((k) => st.causes[k] || 0));
         const loseMax = Math.max(1, ...LOSE_ENDS.map((k) => st.causes[k] || 0));
-        const drops = rallies.flatMap((ra) => (ra.marks || []).filter((mk) => mk.src === dropSrc));
-        const dropForm = mReady || lineup.every(Boolean)
-          ? formation(lineup, 0, dropSrc === "def" ? "d2" : dropSrc === "atk" ? "atk" : "recv", anchors, recvMode, pri, backMode)
-          : { ok: false };
+        const full = lineup.length === 6 && lineup.every(Boolean);
+        const formFor = (sc) => (full ? formation(lineup, 0, sc, anchors, recvMode, pri, backMode) : { ok: false });
+
+        const causeRow = (k, col, denom) => {
+          const open = openCause === k;
+          return (
+            <div key={k}>
+              <div className="flex items-center gap-2" style={{ marginBottom: 3, cursor: "pointer" }}
+                onClick={() => setOpenCause(open ? null : k)}>
+                <span style={{ fontSize: 11.5, width: 64 }}>{END_LABEL[k]}</span>
+                {bar(st.causes[k] || 0, k === "ace" || k === "oppMiss" || k === "atkPoint" ? winMax : loseMax, col)}
+                <span style={{ fontFamily: MONO, fontSize: 11, width: 46, textAlign: "right" }}>
+                  {st.causes[k] || 0}（{pct(st.causes[k] || 0, denom)}）
+                </span>
+              </div>
+              {open && (
+                <div style={{ margin: "2px 0 6px 66px", fontSize: 11, color: C.muted, lineHeight: 1.9 }}>
+                  {blameOf(rallies, k).length === 0 ? "沒有紀錄" : blameOf(rallies, k).map(([id, n]) => (
+                    <div key={id}>
+                      {id === "__none" ? "沒記到是誰（按了跳過）" : nameOf(id)}
+                      <span style={{ fontFamily: MONO, marginLeft: 6 }}>{n}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        };
 
         return (
           <div>
             <div className="flex gap-1 mb-2 flex-wrap">
-              {[["live", "記錄中這局"], ["last", "最近一局"], ["all", `全部 ${mine.length} 局`]].map(([k, l]) => (
-                <button key={k} onClick={() => setStatScope(k)} disabled={k === "live" && !live.length}
-                  style={{
-                    ...btn, fontSize: 11, padding: "5px 9px",
-                    background: statScope === k ? C.ink : C.panel,
-                    color: statScope === k ? C.paper : C.ink,
-                    opacity: k === "live" && !live.length ? 0.4 : 1,
-                  }}>
-                  {l}
-                </button>
-              ))}
+              <button onClick={() => setStatScope("live")} disabled={!live.length}
+                style={{ ...btn, fontSize: 11, padding: "5px 9px", opacity: live.length ? 1 : 0.4,
+                  background: statScope === "live" ? C.ink : C.panel, color: statScope === "live" ? C.paper : C.ink }}>
+                記錄中
+              </button>
+              <button onClick={() => setStatScope("all")}
+                style={{ ...btn, fontSize: 11, padding: "5px 9px",
+                  background: statScope === "all" ? C.ink : C.panel, color: statScope === "all" ? C.paper : C.ink }}>
+                全部 {mine.length} 場
+              </button>
             </div>
+
+            {mine.length > 0 && (
+              <div style={{ ...card, marginBottom: 8, padding: 10 }}>
+                <div style={{ fontSize: 12, fontWeight: 800, marginBottom: 4 }}>已存場次</div>
+                {mine.slice().reverse().map((x) => (
+                  <div key={x._i} className="flex items-center gap-2" style={{ padding: "3px 0", borderTop: `1px solid ${C.edge}` }}>
+                    <button onClick={() => setStatScope(String(x._i))}
+                      style={{
+                        ...btn, flex: 1, textAlign: "left", padding: "4px 8px", fontSize: 11.5,
+                        background: statScope === String(x._i) ? C.ink : C.panel,
+                        color: statScope === String(x._i) ? C.paper : C.ink,
+                      }}>
+                      {x.name || new Date(x.at).toLocaleDateString("zh-TW")}
+                      <span style={{ fontFamily: MONO, marginLeft: 8, opacity: 0.75 }}>{x.us}:{x.them}</span>
+                    </button>
+                    <button onClick={() => {
+                        setSets((S) => S.filter((_, i) => i !== x._i));
+                        if (statScope === String(x._i)) setStatScope("all");
+                      }}
+                      style={{ ...btn, padding: "4px 8px", fontSize: 11, color: C.warn }}>刪</button>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {rallies.length === 0 ? (
               <div style={{ ...card, fontSize: 12, color: C.muted }}>
-                還沒有資料。記完一局後按「結束並存檔」，這裡就會出現統計。
+                這個範圍還沒有資料。記完一局後按「結束並存檔」。
               </div>
             ) : (
               <>
                 <div style={{ ...card, marginBottom: 8 }}>
-                  <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 6 }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 2 }}>
                     得分／失分怎麼來的
                     <span style={{ fontSize: 11, color: C.muted, fontWeight: 400, marginLeft: 6 }}>
                       共 {st.total} 球・{st.us} 得 {st.them} 失
                     </span>
                   </div>
-                  {WIN_ENDS.map((k) => (
-                    <div key={k} className="flex items-center gap-2" style={{ marginBottom: 3 }}>
-                      <span style={{ fontSize: 11.5, width: 64 }}>{END_LABEL[k]}</span>
-                      {bar(st.causes[k] || 0, winMax, C.green)}
-                      <span style={{ fontFamily: MONO, fontSize: 11, width: 42, textAlign: "right" }}>
-                        {st.causes[k] || 0}（{pct(st.causes[k] || 0, st.us)}）
-                      </span>
-                    </div>
-                  ))}
+                  <div style={{ fontSize: 10.5, color: C.muted, marginBottom: 6 }}>點任一列看是誰</div>
+                  {WIN_ENDS.map((k) => causeRow(k, C.green, st.us))}
                   <div style={{ height: 6 }} />
-                  {LOSE_ENDS.map((k) => (
-                    <div key={k} className="flex items-center gap-2" style={{ marginBottom: 3 }}>
-                      <span style={{ fontSize: 11.5, width: 64 }}>{END_LABEL[k]}</span>
-                      {bar(st.causes[k] || 0, loseMax, C.red)}
-                      <span style={{ fontFamily: MONO, fontSize: 11, width: 42, textAlign: "right" }}>
-                        {st.causes[k] || 0}（{pct(st.causes[k] || 0, st.them)}）
-                      </span>
-                    </div>
-                  ))}
+                  {LOSE_ENDS.map((k) => causeRow(k, C.red, st.them))}
+                </div>
+
+                <div style={{ ...card, marginBottom: 8 }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>攻擊表現</div>
+                  <div className="flex items-baseline gap-3">
+                    <span style={{ fontSize: 22, fontWeight: 800, fontFamily: MONO }}>
+                      {atk.point}<span style={{ fontSize: 14, color: C.muted }}>/{atk.total}</span>
+                    </span>
+                    <span style={{ fontSize: 15, fontWeight: 800, color: C.green }}>
+                      得分率 {atk.rate === null ? "—" : atk.rate + "%"}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>
+                    得分 {atk.point}・過網未得分 {atk.over}・失誤 {atk.miss}（只計有畫記號的出手）
+                  </div>
                 </div>
 
                 <div style={{ ...card, marginBottom: 8 }}>
                   <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 2 }}>每一輪的表現</div>
-                  <div style={{ fontSize: 10.5, color: C.muted, marginBottom: 6 }}>
-                    發球輪＝我方發球時的得分率；接發輪＝搶回發球權的比率。球數少於 8 的格子不看比率。
+                  <div style={{ fontSize: 10.5, color: C.muted, marginBottom: 6, lineHeight: 1.8 }}>
+                    這一輪打了幾球、贏了幾球。<b>我方發球</b>是我們發球開始的球（贏＝續發）；
+                    <b>對方發球</b>是對方發球開始的球（贏＝搶回發球權）。球數少於 8 不看比率。
                   </div>
                   <div className="flex" style={{ fontSize: 10.5, color: C.muted, marginBottom: 2 }}>
-                    <span style={{ width: 34 }} /><span style={{ flex: 1 }}>發球輪</span><span style={{ flex: 1 }}>接發輪</span>
+                    <span style={{ width: 34 }} /><span style={{ flex: 1 }}>我方發球</span><span style={{ flex: 1 }}>對方發球</span>
                   </div>
                   {st.byRot.map((r, i) => {
                     const cell = (o) => (
                       <span style={{ flex: 1, fontSize: 11.5 }}>
-                        {o.n === 0 ? <span style={{ color: C.muted }}>—</span> : o.n < 8 ? (
-                          <span style={{ color: C.muted }}>{o.w}/{o.n} 球數不足</span>
+                        {o.n === 0 ? <span style={{ color: C.muted }}>沒打到</span> : o.n < 8 ? (
+                          <span style={{ color: C.muted }}>贏 {o.w} / {o.n} 球</span>
                         ) : (
-                          <><b>{pct(o.w, o.n)}</b> <span style={{ color: C.muted }}>{o.w}/{o.n}</span></>
+                          <><b>{pct(o.w, o.n)}</b> <span style={{ color: C.muted }}>贏 {o.w} / {o.n} 球</span></>
                         )}
                       </span>
                     );
@@ -1936,16 +2043,13 @@ export default function RotationBoard() {
                       </span>
                     </div>
                   ))}
-                  <div style={{ fontSize: 10.5, color: C.muted, marginTop: 4 }}>
-                    只統計你有畫記號的球，按「跳過」的不列入。
-                  </div>
                 </div>
 
                 <div style={{ ...card, marginBottom: 8 }}>
                   <div className="flex items-center justify-between mb-2">
                     <div style={{ fontSize: 13, fontWeight: 800 }}>落點圖</div>
                     <div className="flex gap-1">
-                      {["recv", "def", "atk"].map((k) => (
+                      {["recv", "def"].map((k) => (
                         <button key={k} onClick={() => setDropSrc(k)}
                           style={{
                             ...btn, fontSize: 11, padding: "4px 9px",
@@ -1956,33 +2060,89 @@ export default function RotationBoard() {
                       ))}
                     </div>
                   </div>
-                  <div style={{ maxWidth: 300, margin: "0 auto" }}>
-                    {dropForm.ok ? (
-                      <Court spots={dropForm.spots} fluid marks={drops} />
-                    ) : (
-                      <div style={{ fontSize: 12, color: C.warn }}>目前名單無法畫出球場，先到①名單排滿六人。</div>
-                    )}
-                  </div>
+                  {dropSrc === "def" ? (
+                    <div className="flex gap-1" style={{ alignItems: "flex-start" }}>
+                      {[["L", "對手大砲", "d3"], ["C", "中間", "d2"], ["R", "副攻", "d1"]].map(([d, l, sc]) => {
+                        const fm = formFor(sc);
+                        const mk = rallies.flatMap((ra) => (ra.marks || []).filter((q) => q.src === "def" && q.dir === d));
+                        return (
+                          <div key={d} style={{ flex: "1 1 0", minWidth: 0 }}>
+                            <div style={{ fontSize: 10.5, color: C.muted, textAlign: "center", marginBottom: 2 }}>
+                              {l}<span style={{ fontFamily: MONO, marginLeft: 3 }}>{mk.length}</span>
+                            </div>
+                            {fm.ok ? <Court spots={fm.spots} fluid ball={d} marks={mk} />
+                              : <div style={{ fontSize: 10, color: C.warn }}>名單未滿</div>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (() => {
+                    const fm = formFor("recv");
+                    const mk = rallies.flatMap((ra) => (ra.marks || []).filter((q) => q.src === "recv"));
+                    return (
+                      <div style={{ maxWidth: 300, margin: "0 auto" }}>
+                        {fm.ok ? <Court spots={fm.spots} fluid marks={mk} />
+                          : <div style={{ fontSize: 12, color: C.warn }}>名單未滿六人，畫不出球場。</div>}
+                        <div style={{ fontSize: 10.5, color: C.muted, marginTop: 4, textAlign: "center" }}>
+                          共 {mk.length} 個記號
+                        </div>
+                      </div>
+                    );
+                  })()}
                   <div style={{ fontSize: 10.5, color: C.muted, marginTop: 6 }}>
-                    藍圈＝接起／過網，紅叉＝失誤，綠勾＝得分。共 {drops.length} 個記號。
-                    底下的人名只是參考站位，不代表當時實際陣容。
+                    藍圈＝接起、紅叉＝失誤。底下的人名只是參考站位，不代表當時實際陣容。
                   </div>
                 </div>
 
                 <div style={card}>
-                  <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 6 }}>逐球回顧</div>
-                  <div style={{ maxHeight: 260, overflowY: "auto" }}>
-                    {st.trend.map((t, i) => (
-                      <div key={i} className="flex items-center gap-2"
-                        style={{ fontSize: 11.5, padding: "2px 0", borderTop: i ? `1px solid ${C.edge}` : "none" }}>
-                        <span style={{ fontFamily: MONO, width: 46, color: C.muted }}>{t.us}:{t.them}</span>
-                        <span style={{ fontFamily: MONO, width: 24, color: C.muted }}>R{t.rot + 1}</span>
-                        <span style={{ width: 52, color: C.muted }}>{t.serving ? "我方發" : "對方發"}</span>
-                        <span style={{ color: WIN_ENDS.includes(t.end) ? C.green : C.red, fontWeight: 700 }}>
-                          {END_LABEL[t.end] || "—"}
-                        </span>
-                      </div>
-                    ))}
+                  <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 2 }}>逐球回顧</div>
+                  <div style={{ fontSize: 10.5, color: C.muted, marginBottom: 6 }}>點任一球，把那一球畫的記號調出來</div>
+                  <div style={{ maxHeight: 320, overflowY: "auto" }}>
+                    {st.trend.map((t, i) => {
+                      const ra = rallies[i];
+                      const open = openRally === i;
+                      return (
+                        <div key={i} style={{ borderTop: i ? `1px solid ${C.edge}` : "none" }}>
+                          <div className="flex items-center gap-2"
+                            style={{ fontSize: 11.5, padding: "3px 0", cursor: "pointer" }}
+                            onClick={() => setOpenRally(open ? null : i)}>
+                            <span style={{ fontFamily: MONO, width: 46, color: C.muted }}>{t.us}:{t.them}</span>
+                            <span style={{ fontFamily: MONO, width: 24, color: C.muted }}>R{t.rot + 1}</span>
+                            <span style={{ width: 52, color: C.muted }}>{t.serving ? "我方發" : "對方發"}</span>
+                            <span style={{ color: WIN_ENDS.includes(t.end) ? C.green : C.red, fontWeight: 700 }}>
+                              {END_LABEL[t.end] || "—"}
+                            </span>
+                            <span style={{ marginLeft: "auto", fontSize: 10, color: C.muted }}>
+                              {(ra.marks || []).length ? `${ra.marks.length} 記號` : "無記號"}
+                            </span>
+                          </div>
+                          {open && (ra.marks || []).length > 0 && (
+                            <div className="flex gap-1 flex-wrap" style={{ padding: "4px 0 8px" }}>
+                              {["recv", "def", "atk"].map((srcK) => {
+                                const mk = ra.marks.filter((q) => q.src === srcK);
+                                if (!mk.length) return null;
+                                const sc = srcK === "def"
+                                  ? (mk[0].dir === "L" ? "d3" : mk[0].dir === "C" ? "d2" : "d1")
+                                  : srcK;
+                                const fm = formFor(sc);
+                                return (
+                                  <div key={srcK} style={{ width: 130 }}>
+                                    <div style={{ fontSize: 10, color: C.muted, textAlign: "center" }}>
+                                      {SRC_LABEL[srcK]}
+                                      {srcK === "def" && mk[0].dir ? `・${{ L: "對手大砲", C: "中間", R: "副攻" }[mk[0].dir]}` : ""}
+                                    </div>
+                                    {fm.ok && <Court spots={fm.spots} fluid marks={mk} ball={srcK === "def" ? mk[0].dir : null} />}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                          {open && !(ra.marks || []).length && (
+                            <div style={{ fontSize: 10.5, color: C.muted, padding: "2px 0 6px" }}>這一球沒有畫記號</div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               </>
