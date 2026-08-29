@@ -302,7 +302,8 @@ function applyAction(m, act) {
     // Ace 在防守頁按下：對方完全沒碰到球。發球數已在發球頁計過，這裡只加分
     winRally(); endRally(true, "ace"); n.page = "serve";
   } else if (act.skip) {
-    n.page = "atk"; // 防守跳過：不留記號，直接進攻擊模式
+    // 跳過：不留記號直接往下走。防守→攻擊（接起來了）、攻擊→防守（球過網了）
+    n.page = act.page === "atk" ? "def" : "atk";
   } else {
     n.marks.push(act.mark);
     if (act.page === "def") {
@@ -1806,8 +1807,8 @@ export default function RotationBoard() {
                           對方失誤
                         </button>
                       )}
-                      {isDef && (
-                        <button onClick={() => { clearInk(); act({ page: "def", skip: true }); }}
+                      {(isDef || isAtk) && (
+                        <button onClick={() => { clearInk(); act({ page: match.page, skip: true }); }}
                           style={{ ...btn, flex: 1, padding: "12px 0", fontSize: 15, fontWeight: 700, color: C.muted }}>
                           跳過
                         </button>
@@ -1817,7 +1818,7 @@ export default function RotationBoard() {
                       直接在球場上畫：<b style={{ color: C.blue }}>畫圈</b>＝接起／過網、
                       <b style={{ color: C.red }}>畫一條斜線</b>＝失誤{isAtk && <>、<b style={{ color: C.green }}>畫勾</b>＝得分</>}。
                       {isDef && " 畫在三張圖的哪一張，等於記下對方的攻擊方向。"}
-                      {isAtk && " 記號要畫在球員身上。"}
+                      {isAtk && " 記號要畫在球員身上；「跳過」＝球過網了但不記是誰打的。"}
                     </div>
                   </div>
                 );
