@@ -670,7 +670,9 @@ export default function RotationBoard() {
   const [showRole, setShowRole] = useState(false);
   const [match, setMatch] = useState(null);
   const [hist, setHist] = useState([]);
-  const [ink, setInk] = useState(null); // { dir, pts } 目前這一筆
+  const [ink, setInk] = useState(null);         // { dir, pts } 目前這一筆
+  const [pending, setPending] = useState(null); // 已辨識、正在顯示確認的記號
+  const [note, setNote] = useState("");
 
   const [editKey, setEditKey] = useState("recv.R5.P2");
   const [drag, setDrag] = useState(null);
@@ -781,12 +783,27 @@ export default function RotationBoard() {
     setMatch((m) => applyAction(m, a));
     setInk(null);
   };
+  const undoAll = () => { setInk(null); setPending(null); setNote(""); };
   const undo = () => {
     if (!hist.length) return;
     setMatch(hist[hist.length - 1]);
     setHist((H) => H.slice(0, -1));
   };
   const clearInk = () => setInk(null);
+  // 送出前先讓記號停留一下，使用者才看得到自己畫的被認成什麼
+  useEffect(() => {
+    if (!pending) return;
+    const t = setTimeout(() => {
+      act({ page: pending.page, mark: pending.mark });
+      setPending(null);
+    }, 420);
+    return () => clearTimeout(t);
+  }, [pending]);
+  useEffect(() => {
+    if (!note) return;
+    const t = setTimeout(() => setNote(""), 1400);
+    return () => clearTimeout(t);
+  }, [note]);
   // 落點換算成「座標＋最近的球員」
   const markAt = (spots, x, y, kind, dir) => {
     let best = null, bd = Infinity;
@@ -1460,9 +1477,9 @@ export default function RotationBoard() {
                   )}
                 </div>
                 <div className="flex gap-1">
-                  <button onClick={undo} disabled={!hist.length}
+                  <button onClick={() => { undoAll(); undo(); }} disabled={!hist.length}
                     style={{ ...btn, padding: "4px 9px", opacity: hist.length ? 1 : 0.4 }}>← 上一步</button>
-                  <button onClick={() => { setMatch(null); setHist([]); }}
+                  <button onClick={() => { undoAll(); setMatch(null); setHist([]); }}
                     style={{ ...btn, padding: "4px 9px", color: C.warn }}>結束</button>
                 </div>
               </div>
@@ -1479,6 +1496,22 @@ export default function RotationBoard() {
                   <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.9 }}>
                     共 {match.rallies.length} 球。按「結束」回到名單頁重排陣容，再開下一局。
                   </div>
+                </div>
+              )}
+
+              {mReady && match.page !== "done" && (
+                <div className="flex items-baseline gap-2" style={{ marginBottom: 8 }}>
+                  <span style={{ fontSize: 24, fontWeight: 800, letterSpacing: "0.05em" }}>
+                    {{ serve: "發球", def: "防守", atk: "攻擊", recv: "接發" }[match.page]}
+                  </span>
+                  <span style={{ fontSize: 11.5, color: C.muted }}>
+                    {{
+                      serve: "選這一球的發球結果",
+                      def: "對方進攻，在圖上畫記號",
+                      atk: "我方進攻，畫在該攻擊手身上",
+                      recv: "對方發球，在圖上畫記號",
+                    }[match.page]}
+                  </span>
                 </div>
               )}
 
@@ -1509,18 +1542,19 @@ export default function RotationBoard() {
                 const kinds = isAtk
                   ? [["o", "過網", C.blue], ["v", "得分", C.green], ["x", "失誤", C.red]]
                   : [["o", "接起", C.blue], ["x", "失誤", C.red]];
-                const title = isDef ? "對方進攻，在圖上畫記號" : isAtk ? "我方進攻，畫在該攻擊手身上" : "對方發球，在圖上畫記號";
+                const KIND_NAME = { o: isAtk ? "過網" : "接起", x: "失誤", v: "得分" };
+                const KIND_COLOR = { o: C.blue, x: C.red, v: C.green };
                 const commit = (kind) => {
-                  if (!ink || ink.pts.length < 2) return;
+                  if (!ink || ink.pts.length < 2 || pending) return;
                   const xs = ink.pts.map((q) => q[0]), ys = ink.pts.map((q) => q[1]);
                   const cx = xs.reduce((a, b) => a + b, 0) / xs.length;
                   const cy = ys.reduce((a, b) => a + b, 0) / ys.length;
                   const fm = mForm(isAtk ? "atk" : isDef ? (ink.dir === "L" ? "d3" : ink.dir === "C" ? "d2" : "d1") : "recv");
                   if (!fm.ok) { clearInk(); return; }
                   const mk = markAt(fm.spots, cx, cy, kind, ink.dir);
+                  if (isAtk && mk.dist > 0.16) { clearInk(); setNote("記號要畫在球員身上"); return; }
                   clearInk();
-                  if (isAtk && mk.dist > 0.16) return; // 攻擊模式必須畫在球員身上
-                  act({ page: match.page, mark: mk });
+                  setPending({ page: match.page, mark: mk });
                 };
                 const inkHandler = (dir) => (phase, pt) => {
                   if (phase === "start") setInk({ dir, pts: [pt] });
@@ -1534,7 +1568,6 @@ export default function RotationBoard() {
                 const guess = ink ? recognize(ink.pts) : null;
                 return (
                   <div>
-                    <div style={{ fontSize: 12, marginBottom: 6 }}>{title}</div>
                     {isDef ? (
                       <div className="flex gap-1" style={{ alignItems: "flex-start" }}>
                         {dirs.map(([d, l]) => {
@@ -1544,7 +1577,9 @@ export default function RotationBoard() {
                               <div style={{ fontSize: 10.5, color: C.muted, textAlign: "center", marginBottom: 2 }}>{l}</div>
                               {fm.ok ? (
                                 <Court spots={fm.spots} fluid ball={d}
-                                  ink={ink && ink.dir === d ? ink.pts : null} onInk={inkHandler(d)} />
+                                  marks={pending && pending.mark.dir === d ? [pending.mark] : null}
+                                  ink={ink && ink.dir === d ? ink.pts : null}
+                                  onInk={pending ? null : inkHandler(d)} />
                               ) : <div style={{ fontSize: 10, color: C.warn }}>{fm.reason}</div>}
                             </div>
                           );
@@ -1556,24 +1591,39 @@ export default function RotationBoard() {
                         <div style={{ maxWidth: 320, margin: "0 auto" }}>
                           {fm.ok ? (
                             <Court spots={fm.spots} fluid dimSlots={isAtk ? ["BL", "BR"] : null}
-                              ink={ink ? ink.pts : null} onInk={inkHandler(null)} />
+                              marks={pending ? [pending.mark] : null}
+                              ink={ink ? ink.pts : null}
+                              onInk={pending ? null : inkHandler(null)} />
                           ) : <div style={{ fontSize: 12, color: C.warn }}>{fm.reason}</div>}
                         </div>
                       );
                     })()}
 
-                    {ink && !guess && (
-                      <div style={{ fontSize: 12, color: C.warn, marginTop: 8 }}>
-                        看不出畫的是什麼，直接按下面的按鈕指定。
-                      </div>
-                    )}
+                    <div style={{ minHeight: 26, marginTop: 6 }}>
+                      {pending && (
+                        <span style={{
+                          fontSize: 16, fontWeight: 800, color: "#fff",
+                          background: KIND_COLOR[pending.mark.kind], borderRadius: 8, padding: "3px 12px",
+                        }}>
+                          {pending.mark.kind === "o" ? "○" : pending.mark.kind === "x" ? "✕" : "✓"} {KIND_NAME[pending.mark.kind]}
+                        </span>
+                      )}
+                      {!pending && note && (
+                        <span style={{ fontSize: 12.5, color: C.warn, fontWeight: 700 }}>{note}</span>
+                      )}
+                      {!pending && !note && ink && !guess && (
+                        <span style={{ fontSize: 12.5, color: C.warn, fontWeight: 700 }}>
+                          看不出畫的是什麼，按下面的按鈕指定
+                        </span>
+                      )}
+                    </div>
                     <div className="flex gap-2" style={{ marginTop: 10 }}>
                       {kinds.map(([k, l, col]) => (
-                        <button key={k} onClick={() => commit(k)} disabled={!ink}
+                        <button key={k} onClick={() => commit(k)} disabled={!ink || !!pending}
                           style={{
                             ...btn, flex: 1, padding: "12px 0", fontSize: 15, fontWeight: 800,
                             background: C.panel, color: col, border: `2px solid ${col}`,
-                            opacity: ink ? 1 : 0.35,
+                            opacity: ink && !pending ? 1 : 0.35,
                           }}>
                           {k === "o" ? "○" : k === "x" ? "✕" : "✓"} {l}
                         </button>
