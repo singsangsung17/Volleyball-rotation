@@ -157,7 +157,12 @@ function frontByRole(occ, set) {
     hasBack
       ? (e.role === "副攻" ? "FR" : e.role === "舉球" ? "FC" : "FL")
       : (e.role === "舉球" ? "FR" : e.role === "攔中" ? "FC" : "FL");
-  return { spots: FRONT.map((p) => ({ pos: p, e: occ[p], xy: set[slotFor(occ[p])] })) };
+  return {
+    spots: FRONT.map((p) => {
+      const k = slotFor(occ[p]);
+      return { pos: p, e: occ[p], xy: set[k], slot: k }; // slot 要留著，攔網選人靠它
+    }),
+  };
 }
 
 // 自由球員替上：該員輪到後排即替換；但發球那一格由本人發球（自由不能發球）
@@ -254,11 +259,14 @@ function recognize(pts) {
 }
 
 const END_LABEL = {
-  ace: "Ace", oppMiss: "對方失誤", atkPoint: "攻擊得分",
+  ace: "Ace", oppMiss: "對方失誤", atkPoint: "攻擊得分", blockPoint: "攔網得分",
   serveMiss: "發球失誤", recvMiss: "接發失誤", defMiss: "防守失誤", atkMiss: "攻擊失誤",
+  blockOut: "攔網出界", blockMiss: "攔網失分", netTouch: "觸網", overLine: "越界",
 };
-const WIN_ENDS = ["ace", "oppMiss", "atkPoint"];
-const LOSE_ENDS = ["serveMiss", "recvMiss", "defMiss", "atkMiss"];
+const WIN_ENDS = ["ace", "oppMiss", "atkPoint", "blockPoint"];
+const LOSE_ENDS = ["serveMiss", "recvMiss", "defMiss", "atkMiss", "blockOut", "blockMiss", "netTouch", "overLine"];
+// 這些結束原因沒有對應的記號，不去猜是誰
+const NO_BLAME = ["blockPoint", "blockOut", "blockMiss", "netTouch", "overLine"]; // 攔網類：用點選的球員
 const SRC_LABEL = { recv: "接發", def: "防守", atk: "攻擊" };
 
 // 把一堆球算成報表用的數字（純函式，好驗證）
@@ -289,7 +297,8 @@ function blameOf(rallies, end) {
     if (ra.won) us += 1; else them += 1;
     if (ra.end !== end) return;
     let id;
-    if (end === "oppMiss") id = "__opp";                        // 是對方犯錯，不算我方任何人
+    if (end === "oppMiss") id = "__opp";
+    else if (NO_BLAME.includes(end)) id = ra.blockBy || null;  // 攔網：用你點選的攔網球員
     else if (end === "serveMiss" || end === "ace") id = ra.serverId; // 發球相關的算發球員
     else {
       const mk = (ra.marks || []).slice(-1)[0];                 // 其餘看該球最後畫的那個記號
@@ -362,9 +371,13 @@ function applyAction(m, act) {
     n.rallies.push({
       rot: m.rot, serving: m.serving, serverId: n.serverId, serveCount: m.serveCount,
       marks: n.marks, won, end, at: act.at || null,
+      touched: n.touched || 0, touchers: n.touchers || [], blockBy: n.blockBy || null,
     });
     n.marks = [];
     n.serverId = null;
+    n.touched = 0;
+    n.touchers = [];
+    n.blockBy = null;
     n.ovBack = null; // 臨時換位只在這一球有效
   };
 
@@ -376,6 +389,15 @@ function applyAction(m, act) {
   } else if (act.kind === "oppmiss") {
     // 對方失誤：我方得分，若原本沒有發球權就 side-out 輪轉
     winRally(); endRally(true, "oppMiss"); n.page = "serve";
+  } else if (act.kind === "touch") {
+    n.touched = (m.touched || 0) + 1; // 攔到球但回合還沒結束，留在防守頁繼續畫
+    n.touchers = [...(m.touchers || []), act.by || null];
+  } else if (act.kind === "blockPoint") {
+    n.blockBy = act.by || null;
+    winRally(); endRally(true, "blockPoint"); n.page = "serve";
+  } else if (["blockOut", "blockMiss", "netTouch", "overLine"].includes(act.kind)) {
+    n.blockBy = act.by || null;
+    loseRally(); endRally(false, act.kind); n.page = "recv";
   } else if (act.kind === "ace") {
     // Ace 在防守頁按下：對方完全沒碰到球。發球數已在發球頁計過，這裡只加分
     winRally(); endRally(true, "ace"); n.page = "serve";
@@ -850,6 +872,7 @@ export default function RotationBoard() {
   const [openAtk, setOpenAtk] = useState(false);
   const [openAtkWho, setOpenAtkWho] = useState(null);
   const [swapSel, setSwapSel] = useState(null);
+  const [blockBy, setBlockBy] = useState(null);
   const [hist, setHist] = useState([]);
   const [ink, setInk] = useState(null);         // { dir, pts } 目前這一筆
   const [pending, setPending] = useState(null); // 已辨識、正在顯示確認的記號
@@ -998,6 +1021,8 @@ export default function RotationBoard() {
     setHist((H) => H.slice(0, -1));
   };
   const clearInk = () => setInk(null);
+  const ralliesDone = match ? match.rallies.length : 0;
+  useEffect(() => { setBlockBy(null); }, [ralliesDone]); // 換下一球就重選攔網球員
   // 送出前先讓記號停留一下，使用者才看得到自己畫的被認成什麼
   useEffect(() => {
     if (!pending) return;
@@ -1752,6 +1777,17 @@ export default function RotationBoard() {
                 <div className="flex gap-1">
                   <button onClick={() => { undoAll(); undo(); }} disabled={!hist.length}
                     style={{ ...btn, padding: "4px 9px", opacity: hist.length ? 1 : 0.4 }}>← 上一步</button>
+                  <button onClick={() => {
+                      undoAll();
+                      setHist([]);
+                      setMatch((m) => ({
+                        ...m, us: 0, them: 0, rot: 0, serveCount: 0, serverId: null,
+                        page: m.serving ? "serve" : "recv", marks: [], rallies: [],
+                        winner: null, touched: 0, touchers: [], blockBy: null, ovBack: null,
+                        startedAt: Date.now(),
+                      }));
+                    }}
+                    style={{ ...btn, padding: "4px 9px" }}>重新開始</button>
                   <button onClick={finishMatch}
                     style={{ ...btn, padding: "4px 9px", color: C.warn }}>結束並存檔</button>
                 </div>
@@ -1929,6 +1965,74 @@ export default function RotationBoard() {
                         </span>
                       )}
                     </div>
+                    {isDef && (() => {
+                      const base = mForm("d2");
+                      const front = base.ok
+                        ? ["FL", "FC", "FR"].map((k) => base.spots.find((q) => q.slot === k)).filter(Boolean)
+                        : [];
+                      const fire = (kind) => { clearInk(); act({ page: "def", kind, by: blockBy }); };
+                      const big = (label, kind, col, filled, w) => (
+                        <button key={kind} onClick={() => fire(kind)}
+                          style={{
+                            ...btn, flex: w, minWidth: 0, padding: "13px 0", fontSize: 14, fontWeight: 800,
+                            background: filled ? col : C.panel, color: filled ? "#fff" : col,
+                            border: `2px solid ${col}`,
+                          }}>
+                          {label}
+                        </button>
+                      );
+                      const small = (label, kind, col, w) => (
+                        <button key={kind} onClick={() => fire(kind)}
+                          style={{
+                            ...btn, flex: w, minWidth: 0, padding: "13px 0", fontSize: 11.5, fontWeight: 800,
+                            background: col, color: "#fff", border: `2px solid ${col}`,
+                          }}>
+                          {label}
+                        </button>
+                      );
+                      if (!base.ok) return null;
+                      return (
+                        <div style={{
+                          marginTop: 10, padding: 8, borderRadius: 10,
+                          border: `1.5px solid ${C.edge}`, background: C.paper,
+                        }}>
+                          <div className="flex items-center gap-1 flex-wrap" style={{ marginBottom: 6 }}>
+                            <span style={{ fontSize: 12.5, fontWeight: 800, marginRight: 2 }}>攔網</span>
+                            <span style={{ fontSize: 11, color: blockBy ? C.muted : C.warn, marginRight: 2 }}>
+                              {blockBy ? "誰攔的" : "先點誰攔的"}
+                            </span>
+                            {front.map((f) => {
+                              const on = blockBy === f.e.id;
+                              return (
+                                <button key={f.e.id} onClick={() => setBlockBy(on ? null : f.e.id)}
+                                  style={{
+                                    ...btn, padding: "6px 12px", fontSize: 13, fontWeight: 800,
+                                    background: on ? C.ink : C.panel, color: on ? C.paper : C.ink,
+                                    border: `2px solid ${on ? C.ink : C.edge}`,
+                                  }}>
+                                  {f.e.name || "？"}
+                                </button>
+                              );
+                            })}
+                            {match.touched > 0 && (
+                              <span style={{ fontSize: 10.5, color: C.blue, fontWeight: 700, marginLeft: "auto" }}>
+                                已攔到 {match.touched} 次
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex gap-1" style={{ alignItems: "stretch" }}>
+                            {big("touch", "touch", C.blue, true, 1.4)}
+                            {big("得分", "blockPoint", C.green, true, 1.4)}
+                            {small("touch out", "blockOut", C.red, 1.2)}
+                            {small("觸網", "netTouch", C.red, 1)}
+                            {small("越界", "overLine", C.red, 1)}
+                          </div>
+                          <div style={{ fontSize: 10.5, color: C.muted, marginTop: 5, lineHeight: 1.8 }}>
+                            <b>touch</b>＝攔到但球還在場上，留在這一頁繼續畫記號。沒點球員也能按，只是不會算到個人。
+                          </div>
+                        </div>
+                      );
+                    })()}
                     <div className="flex gap-2" style={{ marginTop: 10 }}>
                       {kinds.map(([k, l, col]) => (
                         <button key={k} onClick={() => commit(k)} disabled={!ink || !!pending}
