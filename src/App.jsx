@@ -873,6 +873,7 @@ export default function RotationBoard() {
   const [openAtkWho, setOpenAtkWho] = useState(null);
   const [swapSel, setSwapSel] = useState(null);
   const [blockBy, setBlockBy] = useState(null);
+  const [bFlash, setBFlash] = useState(null);
   const [hist, setHist] = useState([]);
   const [ink, setInk] = useState(null);         // { dir, pts } 目前這一筆
   const [pending, setPending] = useState(null); // 已辨識、正在顯示確認的記號
@@ -1023,6 +1024,12 @@ export default function RotationBoard() {
   const clearInk = () => setInk(null);
   const ralliesDone = match ? match.rallies.length : 0;
   useEffect(() => { setBlockBy(null); }, [ralliesDone]); // 換下一球就重選攔網球員
+  // 攔網按鈕：先把「按到什麼」顯示出來，過一下才真的送出
+  useEffect(() => {
+    if (!bFlash) return;
+    const t = setTimeout(() => { act(bFlash.a); setBFlash(null); }, 420);
+    return () => clearTimeout(t);
+  }, [bFlash]);
   // 送出前先讓記號停留一下，使用者才看得到自己畫的被認成什麼
   useEffect(() => {
     if (!pending) return;
@@ -1861,11 +1868,13 @@ export default function RotationBoard() {
                   else if (phase === "move") setInk((k) => (k && k.dir === dir ? { ...k, pts: [...k.pts, pt] } : k));
                   else if (ink && ink.pts.length > 1) {
                     const g = recognize(ink.pts);
-                    if (g) commit(g); // 認出來就直接送出；認不出來留著墨跡等手動指定
+                    // 勾（得分）只有攻擊頁有意義，其他頁畫到勾就當成沒認出來
+                    if (g && (isAtk || g !== "v")) commit(g);
                   }
                 };
                 const dirs = [["L", "副攻"], ["C", "中間"], ["R", "大砲"]];
-                const guess = ink ? recognize(ink.pts) : null;
+                const raw = ink ? recognize(ink.pts) : null;
+                const guess = raw && (isAtk || raw !== "v") ? raw : null;
                 return (
                   <div>
                     {(() => {
@@ -1961,9 +1970,13 @@ export default function RotationBoard() {
                       const front = base.ok
                         ? ["FL", "FC", "FR"].map((k) => base.spots.find((q) => q.slot === k)).filter(Boolean)
                         : [];
-                      const fire = (kind) => { clearInk(); act({ page: "def", kind, by: blockBy }); };
+                      const fire = (kind, label, col) => {
+                        if (bFlash) return;
+                        clearInk();
+                        setBFlash({ a: { page: "def", kind, by: blockBy }, label, col });
+                      };
                       const big = (label, kind, col, filled, w) => (
-                        <button key={kind} onClick={() => fire(kind)}
+                        <button key={kind} onClick={() => fire(kind, label, col)} disabled={!!bFlash}
                           style={{
                             ...btn, flex: w, minWidth: 0, padding: "13px 0", fontSize: 14, fontWeight: 800,
                             background: filled ? col : C.panel, color: filled ? "#fff" : col,
@@ -1973,7 +1986,7 @@ export default function RotationBoard() {
                         </button>
                       );
                       const small = (label, kind, col, w) => (
-                        <button key={kind} onClick={() => fire(kind)}
+                        <button key={kind} onClick={() => fire(kind, label, col)} disabled={!!bFlash}
                           style={{
                             ...btn, flex: w, minWidth: 0, padding: "13px 0", fontSize: 11.5, fontWeight: 800,
                             background: col, color: "#fff", border: `2px solid ${col}`,
@@ -2005,7 +2018,14 @@ export default function RotationBoard() {
                                 </button>
                               );
                             })}
-                            {match.touched > 0 && (
+                            {bFlash ? (
+                              <span style={{
+                                marginLeft: "auto", fontSize: 12, fontWeight: 800, color: "#fff",
+                                background: bFlash.col, borderRadius: 7, padding: "3px 10px",
+                              }}>
+                                已記錄 {bFlash.label}
+                              </span>
+                            ) : match.touched > 0 && (
                               <span style={{ fontSize: 10.5, color: C.blue, fontWeight: 700, marginLeft: "auto" }}>
                                 已攔到 {match.touched} 次
                               </span>
