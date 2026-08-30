@@ -1777,16 +1777,7 @@ export default function RotationBoard() {
                 <div className="flex gap-1">
                   <button onClick={() => { undoAll(); undo(); }} disabled={!hist.length}
                     style={{ ...btn, padding: "4px 9px", opacity: hist.length ? 1 : 0.4 }}>← 上一步</button>
-                  <button onClick={() => {
-                      undoAll();
-                      setHist([]);
-                      setMatch((m) => ({
-                        ...m, us: 0, them: 0, rot: 0, serveCount: 0, serverId: null,
-                        page: m.serving ? "serve" : "recv", marks: [], rallies: [],
-                        winner: null, touched: 0, touchers: [], blockBy: null, ovBack: null,
-                        startedAt: Date.now(),
-                      }));
-                    }}
+                  <button onClick={() => { undoAll(); setHist([]); setMatch(null); }}
                     style={{ ...btn, padding: "4px 9px" }}>重新開始</button>
                   <button onClick={finishMatch}
                     style={{ ...btn, padding: "4px 9px", color: C.warn }}>結束並存檔</button>
