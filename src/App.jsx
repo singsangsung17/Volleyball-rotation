@@ -100,11 +100,17 @@ function backOrder(occ, r, pri, mode, serve, ovBack) {
   const players = BACK.map((p) => ({ pos: p, e: occ[p] }));
   const slotted = {};
   const done = new Set();
-  // ① 該輪指定了優先權的格子先給
+  // 每一格有幾個人想守
+  const wantOf = players.map((pl) => backWant(pl.e, pl.pos, serve, mode));
+  const wantCount = {};
+  wantOf.forEach((w) => { if (w) wantCount[w] = (wantCount[w] || 0) + 1; });
+  // ① 只有真的撞格時才套用優先權，而且只能指定「想守那一格」的人。
+  //    這樣介面上看不到的舊設定就不會暗中生效。
   ["L", "C", "R"].forEach((k) => {
+    if ((wantCount[k] || 0) < 2) return;
     const id = pri && pri[`${r}:${k}`];
     if (!id) return;
-    const i = players.findIndex((pl, idx) => !done.has(idx) && pl.e && pl.e.id === id);
+    const i = players.findIndex((pl, idx) => !done.has(idx) && pl.e && pl.e.id === id && wantOf[idx] === k);
     if (i < 0) return;
     slotted[PIN_SLOT[k]] = players[i];
     done.add(i);
@@ -112,7 +118,7 @@ function backOrder(occ, r, pri, mode, serve, ovBack) {
   // ② 其餘照各自想守的格子，先輪到的先取
   players.forEach((pl, i) => {
     if (done.has(i)) return;
-    const s = PIN_SLOT[backWant(pl.e, pl.pos, serve, mode)];
+    const s = PIN_SLOT[wantOf[i]];
     if (s && !slotted[s]) { slotted[s] = pl; done.add(i); }
   });
   const rest = players.filter((_, i) => !done.has(i)); // ③ 剩下的依輪轉順序遞補
@@ -356,7 +362,32 @@ function attackOf(rallies) {
     else if (mk.kind === "x") miss += 1;
   }));
   const total = point + over + miss;
-  return { point, over, miss, total, rate: total ? Math.round((point / total) * 100) : null };
+  const skipped = rallies.reduce((a, ra) => a + (ra.atkSkip || 0), 0);
+  const all = total + skipped;
+  return {
+    point, over, miss, total, skipped, all,
+    rate: total ? Math.round((point / total) * 100) : null,
+    skipRate: all ? Math.round((skipped / all) * 100) : null,
+  };
+}
+
+// 給「剛才按了什麼」用的中文標籤
+function labelOf(a) {
+  if (!a) return "";
+  if (a.kind === "swapback") return a.ovBack ? "後排換位" : "後排復原";
+  if (a.page === "serve") return a.kind === "miss" ? "發球失誤" : "發球成功";
+  const pg = { def: "防守", recv: "接發", atk: "攻擊" }[a.page] || "";
+  if (a.skip) return a.page === "recv" ? "接發跳過（含攻擊）" : `${pg} 跳過`;
+  if (a.kind === "ace") return "Ace";
+  if (a.kind === "oppmiss") return a.page === "recv" ? "對方發球失誤" : "對方失誤";
+  if (a.kind === "touch") return "攔網 touch";
+  if (a.kind === "blockPoint") return "攔網得分";
+  if (["blockOut", "netTouch", "overLine"].includes(a.kind)) return `攔網 ${END_LABEL[a.kind]}`;
+  if (a.mark) {
+    const k = { o: a.page === "atk" ? "○過網" : "○接起", x: "✕失誤", v: "✓得分" }[a.mark.kind] || "";
+    return `${pg} ${k}`;
+  }
+  return pg;
 }
 
 const SET_TARGET = 25;
@@ -379,12 +410,14 @@ function applyAction(m, act) {
       rot: m.rot, serving: m.serving, serverId: n.serverId, serveCount: m.serveCount,
       marks: n.marks, won, end, at: act.at || null,
       touched: n.touched || 0, touchers: n.touchers || [], blockBy: n.blockBy || null,
+      atkSkip: n.atkSkip || 0,
     });
     n.marks = [];
     n.serverId = null;
     n.touched = 0;
     n.touchers = [];
     n.blockBy = null;
+    n.atkSkip = 0;
     n.ovBack = null; // 臨時換位只在這一球有效
   };
 
@@ -409,8 +442,12 @@ function applyAction(m, act) {
     // Ace 在防守頁按下：對方完全沒碰到球。發球數已在發球頁計過，這裡只加分
     winRally(); endRally(true, "ace"); n.page = "serve";
   } else if (act.skip) {
-    // 跳過：不留記號直接往下走。防守→攻擊（接起來了）、攻擊→防守（球過網了）
-    n.page = act.page === "atk" ? "def" : "atk";
+    // 跳過：不留記號直接往下走
+    //   防守跳過 → 攻擊（接起來了，攻擊還要記）
+    //   攻擊跳過 → 防守（球過網了）
+    //   接發跳過 → 直接跳到防守，接發和攻擊都不記
+    if (act.page === "atk" || act.page === "recv") n.atkSkip = (m.atkSkip || 0) + 1;
+    n.page = act.page === "def" ? "atk" : "def";
   } else {
     n.marks.push(act.mark);
     if (act.page === "def") {
@@ -1062,12 +1099,12 @@ export default function RotationBoard() {
     });
   };
   const act = (a) => {
-    setHist((H) => [...H.slice(-40), match]);
+    setHist((H) => [...H.slice(-40), { m: match, label: labelOf(a) }]);
     const stamped = { ...a, at: Date.now() };
     setMatch((m) => applyAction(m, stamped));
     setInk(null);
   };
-  const undoAll = () => { setInk(null); setPending(null); setNote(""); };
+  const undoAll = () => { setInk(null); setPending(null); setNote(""); setBFlash(null); };
   // 結束時把這一局收進清單，統計才看得到歷史
   const finishMatch = () => {
     undoAll();
@@ -1084,7 +1121,8 @@ export default function RotationBoard() {
   };
   const undo = () => {
     if (!hist.length) return;
-    setMatch(hist[hist.length - 1]);
+    const last = hist[hist.length - 1];
+    setMatch(last.m);
     setHist((H) => H.slice(0, -1));
   };
   const clearInk = () => setInk(null);
@@ -1850,8 +1888,11 @@ export default function RotationBoard() {
                   )}
                 </div>
                 <div className="flex gap-1">
-                  <button onClick={() => { undoAll(); undo(); }} disabled={!hist.length}
-                    style={{ ...btn, padding: "4px 9px", opacity: hist.length ? 1 : 0.4 }}>← 上一步</button>
+                  <button onClick={() => { setInk(null); setPending(null); setBFlash(null); undo(); }}
+                    disabled={!hist.length}
+                    style={{ ...btn, padding: "4px 9px", opacity: hist.length ? 1 : 0.4 }}>
+                    ← {hist.length ? hist[hist.length - 1].label : "上一步"}
+                  </button>
                   <button onClick={() => { undoAll(); setHist([]); setMatch(null); }}
                     style={{ ...btn, padding: "4px 9px" }}>重新開始</button>
                   <button onClick={finishMatch}
@@ -1960,7 +2001,13 @@ export default function RotationBoard() {
                       };
                       return (
                         <div className="flex items-center gap-1 flex-wrap" style={{ marginBottom: 6 }}>
-                          <span style={{ fontSize: 11, color: C.muted }}>後排：</span>
+                          <span style={{ fontSize: 11, color: C.muted }}>
+                            後排
+                            <span style={{ marginLeft: 4 }}>
+                              （{match.serving ? `${server ? server.name || "？" : "？"} 發球，整個回合留在場上` : "對方發球"}）
+                            </span>
+                            ：
+                          </span>
                           {back.map((b, i) => {
                             const on = swapSel === b.e.id;
                             return (
@@ -1970,7 +2017,7 @@ export default function RotationBoard() {
                                   background: on ? C.blue : C.panel, color: on ? "#fff" : C.ink,
                                 }}>
                                 <span style={{ fontSize: 10, opacity: 0.7, marginRight: 3 }}>{["左", "中", "右"][i]}</span>
-                                {b.lib ? "L" : b.e.name || "？"}
+                                {b.lib ? `L（替${b.e.name || "？"}）` : b.e.name || "？"}
                               </button>
                             );
                           })}
@@ -2153,7 +2200,7 @@ export default function RotationBoard() {
                           對方失誤
                         </button>
                       )}
-                      {(isDef || isAtk) && (
+                      {(
                         <button onClick={() => { clearInk(); act({ page: match.page, skip: true }); }}
                           style={{ ...btn, flex: 1, padding: "12px 0", fontSize: 15, fontWeight: 700, color: C.muted }}>
                           跳過
@@ -2165,6 +2212,7 @@ export default function RotationBoard() {
                       <b style={{ color: C.red }}>畫一條斜線</b>＝失誤{isAtk && <>、<b style={{ color: C.green }}>畫勾</b>＝得分</>}。
                       {isDef && " 畫在三張圖的哪一張，等於記下對方的攻擊方向。"}
                       {isAtk && " 記號要畫在球員身上；「跳過」＝球過網了但不記是誰打的。"}
+                      {!isDef && !isAtk && " 「跳過」＝接發和攻擊都不記，直接跳到防守，並計入攻擊跳過。"}
                     </div>
                   </div>
                 );
@@ -2379,8 +2427,14 @@ export default function RotationBoard() {
                       得分率 {atk.rate === null ? "—" : atk.rate + "%"}
                     </span>
                   </div>
-                  <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>
-                    得分 {atk.point}・過網未得分 {atk.over}・失誤 {atk.miss}（只計有畫記號的出手）
+                  <div style={{ fontSize: 11, color: C.muted, marginTop: 4, lineHeight: 1.8 }}>
+                    得分 {atk.point}・過網未得分 {atk.over}・失誤 {atk.miss}
+                    <br />
+                    按跳過沒記的 <b style={{ color: atk.skipRate > 30 ? C.warn : C.muted }}>
+                      {atk.skipped}/{atk.all}
+                    </b>
+                    （{atk.skipRate === null ? "—" : atk.skipRate + "%"}）
+                    {atk.skipRate > 30 && "，比例偏高，上面的得分率參考性會下降"}
                   </div>
 
                   {openAtk && (
