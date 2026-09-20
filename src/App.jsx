@@ -68,7 +68,7 @@ const DEFAULT_ANCHORS = {
       C: { FL: [0.292, 0.326], FC: [0.686, 0.329], FR: [0.505, 0.077], BL: [0.235, 0.708], BC: [0.5, 0.88], BR: [0.786, 0.687] },
       R: { FL: [0.168, 0.364], FC: [0.697, 0.313], FR: [0.854, 0.06], BL: [0.303, 0.641], BC: [0.568, 0.816], BR: [0.869, 0.844] },
     },
-    // B＝砲中背（前排沒有舉球，只有單舉會輪到）：砲(左) 中(中) 背(右)
+    // B＝單舉（前排沒有舉球，只有單舉會輪到）：砲(左) 中(中) 背(右)
     B: {
       L: { FL: [0.153, 0.043], FC: [0.294, 0.31], FR: [0.826, 0.348], BL: [0.171, 0.841], BC: [0.475, 0.798], BR: [0.703, 0.656] },
       C: { FL: [0.294, 0.334], FC: [0.509, 0.067], FR: [0.728, 0.339], BL: [0.235, 0.708], BC: [0.5, 0.88], BR: [0.786, 0.687] },
@@ -1483,7 +1483,7 @@ export default function RotationBoard() {
   // 前排三點的名稱隨防守套數而不同：
   // 砲中 砲／中／舉・砲背 砲／舉／背・單舉 砲／中／背
   const defVar = curKey.startsWith("def.") ? curKey.split(".")[1] : null;
-  const DEF_VAR_NAME = { M: "砲中", A: "砲背", B: "砲中背" };
+  const DEF_VAR_NAME = { M: "砲中", A: "砲背", B: "單舉" };
   const ANCHOR_LABEL = {
     FL: "砲", FC: defVar === "A" ? "舉" : "中", FR: defVar === "M" ? "舉" : "背",
     BL: "後排", BC: "後排", BR: "後排",
@@ -2914,7 +2914,7 @@ export default function RotationBoard() {
               ) : (
                 <>
                   <div style={{ fontSize: 10.5, color: C.muted, marginTop: 2, marginBottom: 8 }}>
-                    {/* 接發那幾套跟著隊伍模式走，防守那幾套只標自己的套別（砲中／砲背／砲中背） */}
+                    {/* 接發那幾套跟著隊伍模式走，防守那幾套只標自己的套別（砲中／砲背／單舉） */}
                     {DEF_VAR_NAME[defVar] || team.mode}・{cur.label}
                   </div>
                   {recvLab ? (
