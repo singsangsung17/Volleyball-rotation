@@ -55,6 +55,13 @@ const DEFAULT_ANCHORS = {
   },
 };
 // 跑位目標位（目前介面未使用，保留結構讓已拖曳過的座標不會在載入時被丟掉）
+// 三人接發：先複製四人接發當起點，實際站位請到定點頁拖
+DEFAULT_ANCHORS.recv.R3 = JSON.parse(JSON.stringify(DEFAULT_ANCHORS.recv.R4));
+// 第三套防守「砲中背」：前排沒有舉球時用。砲與中沿用砲中那套，背沿用砲背那套的右格
+DEFAULT_ANCHORS.def.B = Object.fromEntries(["L", "C", "R"].map((d) => [d, {
+  ...DEFAULT_ANCHORS.def.M[d],
+  FR: [...DEFAULT_ANCHORS.def.A[d].FR],
+}]));
 DEFAULT_ANCHORS.move = JSON.parse(JSON.stringify(DEFAULT_ANCHORS.recv));
 
 const DEF_MAP = { d1: "R", d2: "C", d3: "L" };
@@ -155,17 +162,17 @@ function occupancy(lineup, r) {
 function frontByRole(occ, set) {
   const roles = FRONT.map((p) => occ[p].role);
   if (roles.some((r) => !GROUP[r])) return { err: "前排有位置未定" };
-  if (roles.filter((r) => r === "舉球").length !== 1) return { err: "前排舉球不是 1 人" };
-  // 前排三格：
-  //   沒有背：砲(其餘)→左、攔中→中、舉球→右
-  //   有背　：其餘→左、舉球→中、背→右
-  const hasBack = roles.includes("副攻");
-  const pivot = hasBack ? "副攻" : "攔中";
-  if (roles.filter((r) => r === pivot).length !== 1) return { err: "前排角色組合不符" };
-  const slotFor = (e) =>
-    hasBack
-      ? (e.role === "副攻" ? "FR" : e.role === "舉球" ? "FC" : "FL")
-      : (e.role === "舉球" ? "FR" : e.role === "攔中" ? "FC" : "FL");
+  if (roles.filter((r) => GROUP[r] === "X").length !== 1) return { err: "前排大砲不是 1 人" };
+  // 前排三格，三種組合：
+  //   舉＋中＋砲：砲→左、中→中、舉→右
+  //   舉＋背＋砲：砲→左、舉→中、背→右
+  //   中＋背＋砲：砲→左、中→中、背→右（單舉前排沒有舉球時）
+  const n = (r) => roles.filter((x) => x === r).length;
+  let slotFor;
+  if (n("舉球") === 1 && n("副攻") === 1) slotFor = (e) => (e.role === "副攻" ? "FR" : e.role === "舉球" ? "FC" : "FL");
+  else if (n("舉球") === 1 && n("攔中") === 1) slotFor = (e) => (e.role === "舉球" ? "FR" : e.role === "攔中" ? "FC" : "FL");
+  else if (n("攔中") === 1 && n("副攻") === 1) slotFor = (e) => (e.role === "副攻" ? "FR" : e.role === "攔中" ? "FC" : "FL");
+  else return { err: "前排角色組合不符" };
   return {
     spots: FRONT.map((p) => {
       const k = slotFor(occ[p]);
@@ -483,6 +490,7 @@ const C = {
   paper: "#E7E3D9", dot: "#C6C0B0", court: "#DAB596", courtDeep: "#CDA889",
   line: "#F6F1E8", ink: "#221D17", red: "#C4402B", blue: "#4C9FD4",
   panel: "#FBF9F5", edge: "#D8D2C4", muted: "#7B7365", warn: "#B5552F", green: "#4F8A3F",
+  back: "#C9DCE4",
 };
 const FONT = '"Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif';
 const MONO = 'ui-monospace,Menlo,monospace';
@@ -654,7 +662,7 @@ function upgradeSave(raw) {
   return d.v > STORAGE_V ? null : d;
 }
 
-function Court({ spots, ball, size = 96, fluid, svgRef, onDown, labels, flag, byRole, marks, onCourtTap, dimSlots, ink, onInk }) {
+function Court({ spots, ball, size = 96, fluid, svgRef, onDown, labels, flag, byRole, marks, onCourtTap, dimSlots, ink, onInk, rowColor = true }) {
   const toCourt = (ev, el) => {
     const r = el.getBoundingClientRect();
     return [(ev.clientX - r.left) / r.width, (((ev.clientY - r.top) / r.height) * VB_H - 30) / 100];
@@ -710,7 +718,8 @@ function Court({ spots, ball, size = 96, fluid, svgRef, onDown, labels, flag, by
         const isFrontSetter = s.e && s.e.role === "舉球" && FRONT.includes(s.pos);
         const label = labels
           ? (s.label || s.key)
-          : s.lib ? "L" : byRole ? (ROLE_ABBR[s.e.role] || "？") : s.e.name;
+          : byRole ? (s.lib ? "L" : s.tag || ROLE_ABBR[s.e.role] || "？")
+            : s.lib ? (s.libName || "L") : s.e.name;
         const dimmed = dimSlots && s.slot && dimSlots.includes(s.slot);
         return (
           <g key={s.key || (s.e && s.e.id) || i}
@@ -718,10 +727,11 @@ function Court({ spots, ball, size = 96, fluid, svgRef, onDown, labels, flag, by
             onPointerDown={onDown ? (ev) => onDown(ev, s.key != null ? s.key : s.pos) : undefined}
             style={{ cursor: onDown ? "grab" : "default" }}>
             <circle cx={toPx(s.xy[0])} cy={toPy(s.xy[1])} r={labels ? r + 1 : r}
-              fill={isFrontSetter ? "none" : s.lib ? C.ink : labels ? C.panel : C.court}
+              fill={s.lib ? C.ink : labels ? C.panel : rowColor && BACK.includes(s.pos) ? C.back : C.court}
               stroke={isFrontSetter ? C.red : labels ? C.ink : "none"} strokeWidth="1.4" />
             <text x={toPx(s.xy[0])} y={toPy(s.xy[1]) + 3.4} textAnchor="middle"
-              fontSize={labels ? (String(label).length > 1 ? 6.5 : 8) : 10} fontFamily={s.lib ? MONO : FONT}
+              fontSize={labels ? (String(label).length > 1 ? 6.5 : 8) : String(label).length > 1 ? 8 : 10}
+              fontFamily={s.lib ? MONO : FONT}
               fontWeight={s.lib ? 800 : 600} fill={s.lib ? C.paper : C.ink}>
               {label}
             </text>
@@ -886,7 +896,7 @@ const PRESETS = {
 };
 const uid = (p) => p + Math.random().toString(36).slice(2, 8);
 const newTeam = (name) => ({
-  id: uid("t"), name, roster: [], court: [...EMPTY_COURT], mode: null, pri: {}, backMode: "def", tweaks: {},
+  id: uid("t"), name, roster: [], court: [...EMPTY_COURT], mode: null, pri: {}, backMode: "def", tweaks: {}, liberoId: null,
   anchors: JSON.parse(JSON.stringify(DEFAULT_ANCHORS)), recvMode: "R5",
 });
 
@@ -961,6 +971,11 @@ export default function RotationBoard() {
     ? team.anchors : DEFAULT_ANCHORS;
   // 個別微調：{ "輪次:情境:號位": [x,y] }，只蓋掉那一格
   const tweaks = (team && team.tweaks) || {};
+  // 自由球員本人（全隊一位）；沒指定時圖上仍顯示 L，記號記成「自由球員」
+  const liberoId = (team && team.liberoId) || null;
+  const liberoEntry = liberoId ? roster.find((e) => e.id === liberoId) : null;
+  const liberoName = liberoEntry ? liberoEntry.name || "？" : null;
+  const setLiberoId = (id) => patchTeam((t) => ({ ...t, liberoId: id || null }));
   const tweakKey = (r, scene, pos) => `${r}:${scene}:${pos}`;
   const form = (lu, r, scene, weServe, ovBack) => {
     const f = formation(lu, r, scene, anchors, recvMode, pri, backMode, weServe, ovBack);
@@ -969,7 +984,9 @@ export default function RotationBoard() {
       ...f,
       spots: f.spots.map((s) => {
         const t = tweaks[tweakKey(r, scene, s.pos)];
-        return t ? { ...s, xy: t } : s;
+        const s2 = t ? { ...s, xy: t } : s;
+        const s3 = s2.e && roleTag[s2.e.id] ? { ...s2, tag: roleTag[s2.e.id] } : s2;
+        return s3.lib ? { ...s3, libName: liberoName, libId: liberoId } : s3;
       }),
     };
   };
@@ -1064,6 +1081,23 @@ export default function RotationBoard() {
 
   const byId = useMemo(() => Object.fromEntries(roster.map((e) => [e.id, e])), [roster]);
   const lineup = useMemo(() => court.map((id) => byId[id]), [court, byId]);
+  const mySetCount = useMemo(() => sets.filter((x) => x.teamId === activeId).length, [sets, activeId]);
+  // 位置模式的標籤：同位置有兩人時標 砲1／砲2
+  const roleTag = useMemo(() => {
+    const group = {};
+    court.forEach((id) => {
+      const e = byId[id];
+      if (!e || !e.role) return;
+      (group[e.role] = group[e.role] || []).push(id);
+    });
+    const out = {};
+    Object.entries(group).forEach(([role, ids]) => {
+      ids.forEach((id, i) => {
+        out[id] = (ROLE_ABBR[role] || "？") + (ids.length > 1 ? String(i + 1) : "");
+      });
+    });
+    return out;
+  }, [court, byId]);
   const zoneEntry = (p) => byId[court[p - 1]];
   const zoneOf = (id) => court.indexOf(id) + 1; // 0 = 板凳
 
@@ -1156,7 +1190,7 @@ export default function RotationBoard() {
       if (d < bd) { bd = d; best = s; }
     });
     // 該格是自由球員替上場的話，記在自由身上，不能算給被替下的人
-    const pid = best ? (best.lib ? "__libero" : best.e.id) : null;
+    const pid = best ? (best.lib ? (best.libId || "__libero") : best.e.id) : null;
     return { kind, x, y, dir: dir || null, src: match ? match.page : null, playerId: pid, dist: +bd.toFixed(3) };
   };
 
@@ -1272,7 +1306,7 @@ export default function RotationBoard() {
           ctx.restore();
         };
 
-        const drawCourt = (ox, oy, spots, ball, flag) => {
+        const drawCourt = (ox, oy, spots, ball, flag, rowColor) => {
           ctx.fillStyle = C.court;
           rr(ox, oy, CW, 130, 4);
           ctx.fill();
@@ -1302,17 +1336,19 @@ export default function RotationBoard() {
             const frontSetter = sp.e.role === "舉球" && FRONT.includes(sp.pos);
             ctx.beginPath();
             ctx.arc(cx, cy, 9, 0, Math.PI * 2);
+            ctx.fillStyle = sp.lib ? C.ink : rowColor && BACK.includes(sp.pos) ? C.back : C.court;
+            ctx.fill();
             if (frontSetter) {
               ctx.strokeStyle = C.red;
               ctx.lineWidth = 1.4;
               ctx.stroke();
-            } else {
-              ctx.fillStyle = sp.lib ? C.ink : C.court;
-              ctx.fill();
             }
-            const lab = sp.lib ? "L" : showRole ? ROLE_ABBR[sp.e.role] || "？" : sp.e.name || "？";
+            const lab = showRole
+              ? (sp.lib ? "L" : sp.tag || ROLE_ABBR[sp.e.role] || "？")
+              : sp.lib ? (sp.libName || "L") : sp.e.name || "？";
             txt(lab, cx, cy + 3.4, {
-              size: 10, weight: sp.lib ? 800 : 600, color: sp.lib ? C.paper : C.ink,
+              size: String(lab).length > 1 ? 8 : 10,
+              weight: sp.lib ? 800 : 600, color: sp.lib ? C.paper : C.ink,
             });
           });
         };
@@ -1336,9 +1372,9 @@ export default function RotationBoard() {
           const occ = occupancy(lineup, r);
           [...FRONT, ...BACK].forEach((pz, n) => {
             const e = occ[pz];
-            txt(e ? (showRole ? ROLE_ABBR[e.role] || "？" : e.name || "？") : "？",
-              PAD + 14 + (n % 3) * 26, oy + 32 + Math.floor(n / 3) * 20,
-              { size: 14, weight: 800 });
+            const lb = e ? (showRole ? roleTag[e.id] || ROLE_ABBR[e.role] || "？" : e.name || "？") : "？";
+            txt(lb, PAD + 14 + (n % 3) * 26, oy + 32 + Math.floor(n / 3) * 20,
+              { size: String(lb).length > 1 ? 12 : 14, weight: 800 });
           });
           SCENES.forEach((sc, i) => {
             const fm = form(lineup, r, sc.id);
@@ -1355,7 +1391,7 @@ export default function RotationBoard() {
               txt(fm.reason, ox + CW / 2, oy + 76, { size: 10, color: C.warn });
               return;
             }
-            drawCourt(ox, oy, fm.spots, sc.ball && DEF_MAP[sc.id], false); // 分享用的圖不標紅框
+            drawCourt(ox, oy, fm.spots, sc.ball && DEF_MAP[sc.id], false, sc.id !== "serve");
           });
         }
 
@@ -1769,6 +1805,23 @@ export default function RotationBoard() {
 
           {/* 隊員名單（可收合、可儲存） */}
           <div style={{ borderTop: `1px solid ${C.edge}`, marginTop: 12, paddingTop: 10 }}>
+            <div className="flex items-center gap-1 flex-wrap mb-2">
+              <span style={{ fontSize: 11, color: C.muted }}>自由球員：</span>
+              <select value={liberoId || ""} onChange={(e) => setLiberoId(e.target.value)}
+                style={{
+                  fontFamily: FONT, fontSize: 12, padding: "5px 6px", borderRadius: 8,
+                  border: `1px solid ${liberoId ? C.ink : C.edge}`, background: C.panel, color: C.ink,
+                }}>
+                <option value="">未指定（圖上顯示 L）</option>
+                {roster.map((e) => (
+                  <option key={e.id} value={e.id}>{e.name || "？"}</option>
+                ))}
+              </select>
+              <span style={{ fontSize: 10.5, color: C.muted }}>
+                指定後圖上顯示他的名字，失誤等記錄也會算到他頭上
+              </span>
+            </div>
+
             <div className="flex items-center justify-between mb-2">
               <div style={{ fontSize: 13, fontWeight: 800 }}>
                 隊員名單
@@ -1838,7 +1891,7 @@ export default function RotationBoard() {
             {[["live", "記錄"], ["report", "戰報"]].map(([k, l]) => (
               <button key={k} onClick={() => setMView(k)}
                 style={{ ...btn, background: mView === k ? C.ink : C.panel, color: mView === k ? C.paper : C.ink }}>
-                {l}{k === "report" && sets.length > 0 ? ` (${sets.length})` : ""}
+                {l}{k === "report" && mySetCount > 0 ? ` (${mySetCount})` : ""}
               </button>
             ))}
           </div>
@@ -1940,7 +1993,7 @@ export default function RotationBoard() {
                       <span style={{ fontSize: 11, color: C.muted, marginLeft: 8 }}>本輪已發 {match.serveCount} 球</span>
                     </div>
                     <div style={{ maxWidth: 300, margin: "0 auto" }}>
-                      {fm.ok ? <Court spots={fm.spots} fluid /> : <div style={{ fontSize: 12, color: C.warn }}>{fm.reason}</div>}
+                      {fm.ok ? <Court spots={fm.spots} fluid rowColor={false} /> : <div style={{ fontSize: 12, color: C.warn }}>{fm.reason}</div>}
                     </div>
                     <div className="flex gap-2 mt-3">
                       <button onClick={() => act({ page: "serve", kind: "in", serverId: server.id })}
@@ -2017,7 +2070,7 @@ export default function RotationBoard() {
                                   background: on ? C.blue : C.panel, color: on ? "#fff" : C.ink,
                                 }}>
                                 <span style={{ fontSize: 10, opacity: 0.7, marginRight: 3 }}>{["左", "中", "右"][i]}</span>
-                                {b.lib ? `L（替${b.e.name || "？"}）` : b.e.name || "？"}
+                                {b.lib ? `${b.libName || "L"}（替${b.e.name || "？"}）` : b.e.name || "？"}
                               </button>
                             );
                           })}
@@ -2680,10 +2733,10 @@ export default function RotationBoard() {
                   <div className="flex flex-wrap" style={{ marginTop: 2 }}>
                     {[...FRONT, ...BACK].map((p) => {
                       const e = occupancy(lineup, r)[p];
-                      const txt = e ? (showRole ? ROLE_ABBR[e.role] || "？" : e.name || "？") : "？";
+                      const txt = e ? (showRole ? roleTag[e.id] || ROLE_ABBR[e.role] || "？" : e.name || "？") : "？";
                       return (
                         <span key={p} style={{
-                          width: "33.3%", fontSize: 14, fontWeight: 800,
+                          width: "33.3%", fontSize: String(txt).length > 1 ? 12 : 14, fontWeight: 800,
                           lineHeight: 1.45, color: C.ink, textAlign: "center",
                         }}>
                           {txt}
@@ -2713,7 +2766,7 @@ export default function RotationBoard() {
                       style={{ width: 100, marginLeft: gap, background: "none", border: "none", padding: "0 2px" }}>
                       <div style={{ position: "relative" }}>
                         <Court spots={fm.spots} byRole={showRole} ball={s.ball && DEF_MAP[s.id]} size={96}
-                          flag={viol.length > 0} />
+                          flag={viol.length > 0} rowColor={s.id !== "serve"} />
                         {hasTweak(r, s.id) && (
                           <span style={{
                             position: "absolute", top: 3, right: 5, fontSize: 9, fontWeight: 800,
@@ -2729,7 +2782,10 @@ export default function RotationBoard() {
           </div>
           <div className="no-print" style={{ marginTop: 8 }}>
             <div style={{ fontSize: 11, color: C.muted, marginBottom: 6 }}>
-              紅框＝接發在擊球瞬間有位置錯誤。點小圖放大看細節。
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4, marginRight: 10 }}>
+              <span style={{ width: 11, height: 11, borderRadius: "50%", background: C.back, display: "inline-block" }} />＝後排
+            </span>
+            紅框＝接發在擊球瞬間有位置錯誤。點小圖放大看細節。
             </div>
             <button onClick={exportPng} disabled={pngBusy}
               style={{ ...btn, background: C.ink, color: C.paper, fontWeight: 700, opacity: pngBusy ? 0.5 : 1 }}>
@@ -2868,6 +2924,7 @@ export default function RotationBoard() {
                   onPointerUp={() => setZDrag(null)} onPointerLeave={() => setZDrag(null)}>
                   <Court spots={fm.spots} byRole={showRole} svgRef={zRef}
                     ball={zoom.scene.ball && DEF_MAP[zoom.scene.id]} size={250} flag={viol.length > 0}
+                    rowColor={zoom.scene.id !== "serve"}
                     onDown={(ev, k) => { ev.preventDefault(); setZDrag(k); }} />
                 </div>
               )}
@@ -2888,7 +2945,7 @@ export default function RotationBoard() {
                 )}
               </div>
               <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>
-                紅圈＝前排舉球　深色 L＝自由球員
+                紅圈＝前排舉球　深色底＝自由球員
               </div>
             </div>
           </div>
