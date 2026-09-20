@@ -206,17 +206,28 @@ function occupancy(lineup, r) {
 
 // 位置簡寫的編號：同位置有兩人時標 1／2（砲1／砲2）。
 // 砲中背（雙）的兩位舉球不編號——他們一前一後，簡寫本來就會是「背」與「舉」
-function roleNumbers(court, byId, teamMode) {
+/* 某一輪的位置簡寫（id → 「砲」「砲1」…）。
+   砲中背（雙）的舉球在前排是副攻、在後排是舉球，同一個人不同輪次標籤會變，
+   所以要逐輪算：先用 effRole 取這一輪每個號位的有效位置，
+   再在「同一個有效位置」的人之間編號。編號依 court 順序，六輪都不會跳號；
+   一輪裡只有一個人的位置（例如砲中背（雙）的 1 背 1 舉）就不編號。 */
+function roleTagsAt(lineup, r, teamMode) {
+  const occ = occupancy(lineup, r);
+  const eff = {};
+  for (let q = 1; q <= 6; q++) {
+    const e = occ[q];
+    if (e && e.role) eff[e.id] = effRole(e, q, teamMode);
+  }
   const group = {};
-  court.forEach((id) => {
-    const e = byId[id];
-    if (!e || !e.role) return;
-    (group[e.role] = group[e.role] || []).push(id);
+  lineup.forEach((e) => { // 依 court 順序分組，編號才穩定
+    if (!e || !eff[e.id]) return;
+    (group[eff[e.id]] = group[eff[e.id]] || []).push(e.id);
   });
   const out = {};
   Object.entries(group).forEach(([role, ids]) => {
-    const skip = teamMode === MODE_B2 && role === "舉球";
-    ids.forEach((id, i) => { out[id] = ids.length > 1 && !skip ? String(i + 1) : ""; });
+    ids.forEach((id, i) => {
+      out[id] = (ROLE_ABBR[role] || "？") + (ids.length > 1 ? String(i + 1) : "");
+    });
   });
   return out;
 }
@@ -1098,12 +1109,13 @@ export default function RotationBoard() {
   const form = (lu, r, scene, weServe, ovBack) => {
     const f = formation(lu, r, scene, anchors, recvMode, pri, backMode, weServe, ovBack, teamMode);
     if (!f.ok) return f;
+    const tags = roleTagsAt(lu, r, teamMode);
     return {
       ...f,
       spots: f.spots.map((s) => {
         const t = tweaks[tweakKey(r, scene, s.pos)];
         const s2 = t ? { ...s, xy: t } : s;
-        const s3 = s2.e ? { ...s2, tag: tagAt(s2.e, s2.pos) } : s2;
+        const s3 = s2.e ? { ...s2, tag: tags[s2.e.id] || "？" } : s2;
         return s3.lib ? { ...s3, libName: liberoName, libId: liberoId } : s3;
       }),
     };
@@ -1200,10 +1212,8 @@ export default function RotationBoard() {
   const byId = useMemo(() => Object.fromEntries(roster.map((e) => [e.id, e])), [roster]);
   const lineup = useMemo(() => court.map((id) => byId[id]), [court, byId]);
   const mySetCount = useMemo(() => sets.filter((x) => x.teamId === activeId).length, [sets, activeId]);
-  const roleNum = roleNumbers(court, byId, teamMode);
-  // 圖上圈內／全圖左欄的位置簡寫：依號位算有效位置，再補上同位置的編號
-  const tagAt = (e, pos) =>
-    (e ? (ROLE_ABBR[effRole(e, pos, teamMode)] || "？") + (roleNum[e.id] || "") : "？");
+  // 全圖左欄／輸出 PNG 的位置簡寫：那一輪算一次
+  const tagOf = (lu, r, e) => (e ? roleTagsAt(lu, r, teamMode)[e.id] || "？" : "？");
   const zoneEntry = (p) => byId[court[p - 1]];
   const zoneOf = (id) => court.indexOf(id) + 1; // 0 = 板凳
 
@@ -1478,7 +1488,7 @@ export default function RotationBoard() {
           const occ = occupancy(lineup, r);
           [...FRONT, ...BACK].forEach((pz, n) => {
             const e = occ[pz];
-            const lb = e ? (showRole ? tagAt(e, pz) : e.name || "？") : "？";
+            const lb = e ? (showRole ? tagOf(lineup, r, e) : e.name || "？") : "？";
             txt(lb, PAD + 14 + (n % 3) * 26, oy + 32 + Math.floor(n / 3) * 20,
               { size: String(lb).length > 1 ? 12 : 14, weight: 800 });
           });
@@ -2856,7 +2866,7 @@ export default function RotationBoard() {
                   <div className="flex flex-wrap" style={{ marginTop: 2 }}>
                     {[...FRONT, ...BACK].map((p) => {
                       const e = occupancy(lineup, r)[p];
-                      const txt = e ? (showRole ? tagAt(e, p) : e.name || "？") : "？";
+                      const txt = e ? (showRole ? tagOf(lineup, r, e) : e.name || "？") : "？";
                       return (
                         <span key={p} style={{
                           width: "33.3%", fontSize: String(txt).length > 1 ? 12 : 14, fontWeight: 800,
