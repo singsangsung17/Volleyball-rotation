@@ -9,6 +9,19 @@ import { useState, useMemo, useRef, useEffect } from "react";
 // 但 GROUP／DEFAULT_BACK_ROLE 仍保留它，舊存檔裡的「自由」不會壞掉
 const ROLE_LIST = ["舉球", "大砲", "副攻", "攔中"];
 const GROUP = { 舉球: "S", 攔中: "M", 副攻: "M", 大砲: "X", 自由: "X" };
+/* 四種模式，以及每個模式會用到哪幾套防守定點（M＝砲中、A＝砲背、B＝砲中背）。
+   這張表是模式清單的單一來源：定點頁的按鈕、防守排、存檔裡的 anchors.def 都看它。
+   單舉六輪前排會在 砲中舉／砲中背 之間交替，所以是兩套。 */
+const MODE_VARIANTS = {
+  "砲中(雙)": ["M"],
+  "砲背(雙)": ["A"],
+  "砲中背(雙)": ["B"],
+  單舉: ["M", "B"],
+};
+const MODE_KEYS = Object.keys(MODE_VARIANTS);
+const MODE_B2 = "砲中背(雙)"; // 只有這個模式的舉球會在前排改打副攻（見 effRole）
+// 每一套防守定點的「原生」模式：查不到指定模式時從這裡退回
+const VARIANT_HOME = { M: "砲中(雙)", A: "砲背(雙)", B: "砲中背(雙)" };
 // 全圖切到「位置」模式時圈圈裡顯示的簡稱
 const ROLE_ABBR = { 舉球: "舉", 大砲: "砲", 攔中: "中", 副攻: "背", 自由: "自" };
 
@@ -17,7 +30,7 @@ const ROLE_ABBR = { 舉球: "舉", 大砲: "砲", 攔中: "中", 副攻: "背", 
    接發＝號位制（1–6）　防守＝角色制（FL/FC/FR/BL/BC/BR）
    防守分三套：A＝砲背（前排有副攻）、M＝砲中（前排有攔中）、B＝砲中背（前排沒有舉球）
    砲中：砲(左) 中(中) 舉(右)　／　砲背：砲(左) 舉(中) 背(右)
-   砲中背：砲(左) 中(中) 背(右)（砲中背（雙）與單舉會輪到）
+   砲中背：砲(左) 中(中) 背(右)（砲中背(雙)與單舉會輪到）
    發球圖用固定的平行陣（SERVE_GRID），格子分配與防守完全同一套規則；
    1號位是發球員，站在端線外
    ============================================================ */
@@ -57,31 +70,50 @@ const DEFAULT_ANCHORS = {
       P6: { 1: [0.834, 0.636], 2: [0.775, 0.227], 3: [0.563, 0.101], 4: [0.169, 0.581], 5: [0.486, 0.713], 6: [0.566, 0.233] },
     },
   },
-  def: {
-    // M＝砲中（前排中間是攔中）：砲(左) 中(中) 舉(右)
-    M: {
-      L: { FL: [0.153, 0.043], FC: [0.294, 0.31], FR: [0.805, 0.33], BL: [0.171, 0.841], BC: [0.475, 0.798], BR: [0.703, 0.656] },
-      C: { FL: [0.294, 0.334], FC: [0.509, 0.067], FR: [0.718, 0.327], BL: [0.235, 0.708], BC: [0.5, 0.88], BR: [0.786, 0.687] },
-      R: { FL: [0.168, 0.364], FC: [0.851, 0.071], FR: [0.697, 0.313], BL: [0.303, 0.641], BC: [0.568, 0.816], BR: [0.869, 0.844] },
-    },
-    // A＝砲背（前排有副攻）：砲(左) 舉(中) 背(右)
-    A: {
-      L: { FL: [0.157, 0.05], FC: [0.263, 0.279], FR: [0.826, 0.348], BL: [0.171, 0.841], BC: [0.475, 0.798], BR: [0.703, 0.656] },
-      C: { FL: [0.292, 0.326], FC: [0.686, 0.329], FR: [0.505, 0.077], BL: [0.235, 0.708], BC: [0.5, 0.88], BR: [0.786, 0.687] },
-      R: { FL: [0.168, 0.364], FC: [0.697, 0.313], FR: [0.854, 0.06], BL: [0.303, 0.641], BC: [0.568, 0.816], BR: [0.869, 0.844] },
-    },
-    // B＝砲中背（前排沒有舉球）：砲(左) 中(中) 背(右)
-    B: {
-      L: { FL: [0.153, 0.043], FC: [0.294, 0.31], FR: [0.826, 0.348], BL: [0.171, 0.841], BC: [0.475, 0.798], BR: [0.703, 0.656] },
-      C: { FL: [0.294, 0.334], FC: [0.509, 0.067], FR: [0.728, 0.339], BL: [0.235, 0.708], BC: [0.5, 0.88], BR: [0.786, 0.687] },
-      R: { FL: [0.168, 0.364], FC: [0.851, 0.071], FR: [0.854, 0.06], BL: [0.303, 0.641], BC: [0.568, 0.816], BR: [0.869, 0.844] },
-    },
+};
+/* 三套防守定點的原始值。下面會依 MODE_VARIANTS 複製給每個模式各存一份，
+   每個模式都是獨立的深拷貝，改了一個不會動到另一個。 */
+const DEF_SETS = {
+  // M＝砲中（前排中間是攔中）：砲(左) 中(中) 舉(右)
+  M: {
+    L: { FL: [0.153, 0.043], FC: [0.294, 0.31], FR: [0.805, 0.33], BL: [0.171, 0.841], BC: [0.475, 0.798], BR: [0.703, 0.656] },
+    C: { FL: [0.294, 0.334], FC: [0.509, 0.067], FR: [0.718, 0.327], BL: [0.235, 0.708], BC: [0.5, 0.88], BR: [0.786, 0.687] },
+    R: { FL: [0.168, 0.364], FC: [0.851, 0.071], FR: [0.697, 0.313], BL: [0.303, 0.641], BC: [0.568, 0.816], BR: [0.869, 0.844] },
+  },
+  // A＝砲背（前排有副攻）：砲(左) 舉(中) 背(右)
+  A: {
+    L: { FL: [0.157, 0.05], FC: [0.263, 0.279], FR: [0.826, 0.348], BL: [0.171, 0.841], BC: [0.475, 0.798], BR: [0.703, 0.656] },
+    C: { FL: [0.292, 0.326], FC: [0.686, 0.329], FR: [0.505, 0.077], BL: [0.235, 0.708], BC: [0.5, 0.88], BR: [0.786, 0.687] },
+    R: { FL: [0.168, 0.364], FC: [0.697, 0.313], FR: [0.854, 0.06], BL: [0.303, 0.641], BC: [0.568, 0.816], BR: [0.869, 0.844] },
+  },
+  // B＝砲中背（前排沒有舉球）：砲(左) 中(中) 背(右)
+  B: {
+    L: { FL: [0.153, 0.043], FC: [0.294, 0.31], FR: [0.826, 0.348], BL: [0.171, 0.841], BC: [0.475, 0.798], BR: [0.703, 0.656] },
+    C: { FL: [0.294, 0.334], FC: [0.509, 0.067], FR: [0.728, 0.339], BL: [0.235, 0.708], BC: [0.5, 0.88], BR: [0.786, 0.687] },
+    R: { FL: [0.168, 0.364], FC: [0.851, 0.071], FR: [0.854, 0.06], BL: [0.303, 0.641], BC: [0.568, 0.816], BR: [0.869, 0.844] },
   },
 };
+// 每個模式各存一份（深拷貝）：之後拖動某個模式的點，不會動到別的模式
+DEFAULT_ANCHORS.def = Object.fromEntries(MODE_KEYS.map((m) => [
+  m, Object.fromEntries(MODE_VARIANTS[m].map((v) => [v, JSON.parse(JSON.stringify(DEF_SETS[v]))])),
+]));
 // 跑位目標位（目前介面未使用，保留結構讓已拖曳過的座標不會在載入時被丟掉）
 DEFAULT_ANCHORS.move = JSON.parse(JSON.stringify(DEFAULT_ANCHORS.recv));
 
 const DEF_MAP = { d1: "R", d2: "C", d3: "L" };
+/* 取某個模式的某一套防守定點。模式沒選、存檔還沒補上那一套時，
+   先退回同一套定點的原生模式，再退回內建預設值——不會回傳 undefined。 */
+// 這一隊的定點；結構缺東西（舊版存檔、手動匯入）就整包退回預設值
+const anchorsOf = (t) =>
+  ((t && t.anchors && t.anchors.recv && t.anchors.def && t.anchors.def[MODE_KEYS[0]])
+    ? t.anchors : DEFAULT_ANCHORS);
+const defAnchors = (A, mode, variant) => {
+  const d = (A && A.def) || {};
+  const home = VARIANT_HOME[variant] || MODE_KEYS[0];
+  return (d[mode] && d[mode][variant])
+    || (d[home] && d[home][variant])
+    || DEFAULT_ANCHORS.def[home][variant];
+};
 // 接發模式 → 接發人數（畫面標題用）
 const RECV_N = { R3: "3", R4: "4", R5: "5" };
 
@@ -90,10 +122,9 @@ const RECV_N = { R3: "3", R4: "4", R5: "5" };
    ============================================================ */
 const FRONT = [4, 3, 2]; // 左4 中3 右2
 const BACK = [5, 6, 1];  // 左5 中6 右1
-/* 砲中背（雙）：兩位舉球都是雙重身份——輪到前排時當副攻打，輪到後排才是舉球。
+/* 砲中背(雙)：兩位舉球都是雙重身份——輪到前排時當副攻打，輪到後排才是舉球。
    名單上他們的位置一律是「舉球」，引擎要看的是「這一輪實際打什麼」，
    所以全檔一律用 effRole(e, pos, mode) 取角色，不要直接讀 e.role。 */
-const MODE_B2 = "砲中背（雙）";
 const effRole = (e, pos, mode) =>
   (!e ? null
     : mode === MODE_B2 && e.role === "舉球" && FRONT.includes(pos) ? "副攻"
@@ -120,9 +151,9 @@ const FRONT_SLOTS = ["FL", "FC", "FR"];
 const DEFAULT_BACK_ROLE = { 大砲: "C", 攔中: "L", 副攻: "L", 舉球: "R", 自由: "L" };
 // 「預設」後排守位：每個模式各一張表（位置 → 格子）
 const MODE_BACK_ROLE = {
-  "砲中（雙）": { 攔中: "L", 大砲: "C", 舉球: "R" },
-  "砲背（雙）": { 副攻: "L", 大砲: "C", 舉球: "R" },
-  "砲中背（雙）": { 攔中: "L", 大砲: "C", 舉球: "R" },
+  "砲中(雙)": { 攔中: "L", 大砲: "C", 舉球: "R" },
+  "砲背(雙)": { 副攻: "L", 大砲: "C", 舉球: "R" },
+  "砲中背(雙)": { 攔中: "L", 大砲: "C", 舉球: "R" },
   單舉: { 攔中: "L", 大砲: "C", 舉球: "R", 副攻: "R" },
 };
 const backRoleTable = (teamMode) => MODE_BACK_ROLE[teamMode] || DEFAULT_BACK_ROLE;
@@ -205,12 +236,12 @@ function occupancy(lineup, r) {
 }
 
 // 位置簡寫的編號：同位置有兩人時標 1／2（砲1／砲2）。
-// 砲中背（雙）的兩位舉球不編號——他們一前一後，簡寫本來就會是「背」與「舉」
+// 砲中背(雙)的兩位舉球不編號——他們一前一後，簡寫本來就會是「背」與「舉」
 /* 某一輪的位置簡寫（id → 「砲」「砲1」…）。
-   砲中背（雙）的舉球在前排是副攻、在後排是舉球，同一個人不同輪次標籤會變，
+   砲中背(雙)的舉球在前排是副攻、在後排是舉球，同一個人不同輪次標籤會變，
    所以要逐輪算：先用 effRole 取這一輪每個號位的有效位置，
    再在「同一個有效位置」的人之間編號。編號依 court 順序，六輪都不會跳號；
-   一輪裡只有一個人的位置（例如砲中背（雙）的 1 背 1 舉）就不編號。 */
+   一輪裡只有一個人的位置（例如砲中背(雙)的 1 背 1 舉）就不編號。 */
 function roleTagsAt(lineup, r, teamMode) {
   const occ = occupancy(lineup, r);
   const eff = {};
@@ -264,7 +295,7 @@ function formation(lineup, r, sceneId, A, recvMode, pri, backMode, weServe, ovBa
   const occ = occupancy(lineup, r);
 
   if (sceneId === "recv") {
-    // 前排剛好一個舉球就用他的號位；舉球在後排時（單舉、砲中背（雙））改用全場唯一那位
+    // 前排剛好一個舉球就用他的號位；舉球在後排時（單舉、砲中背(雙)）改用全場唯一那位
     const fs = FRONT.filter((p) => effRole(occ[p], p, teamMode) === "舉球");
     const all = [1, 2, 3, 4, 5, 6].filter((p) => effRole(occ[p], p, teamMode) === "舉球");
     const sp = fs.length === 1 ? fs[0] : all.length === 1 ? all[0] : null;
@@ -285,7 +316,7 @@ function formation(lineup, r, sceneId, A, recvMode, pri, backMode, weServe, ovBa
     sceneId === "serve" ? true
       : sceneId === "recv" ? false
         : weServe === undefined ? true : !!weServe;
-  const set = useGrid ? SERVE_GRID : A.def[frontVariant(occ, teamMode)][DEF_MAP[sceneId]];
+  const set = useGrid ? SERVE_GRID : defAnchors(A, teamMode, frontVariant(occ, teamMode))[DEF_MAP[sceneId]];
   const f = frontByRole(occ, set, teamMode);
   if (f.err) return { ok: false, reason: f.err };
   const spots = [...f.spots];
@@ -577,7 +608,7 @@ const BALL_X = { L: 0.12, C: 0.5, R: 0.88 };
 const toPx = (x) => x * 100;
 const toPy = (y) => 30 + y * 100;
 const STORAGE_KEY = "volley-squad-v1";
-const STORAGE_V = 17; // 每次改變存檔結構就 +1，並在 MIGRATIONS 補一步
+const STORAGE_V = 18; // 每次改變存檔結構就 +1，並在 MIGRATIONS 補一步
 
 /* ---- 存檔位置 ----------------------------------------------------------
    Claude 內建環境有 window.storage（每位使用者各自一份，預設 shared=false）。
@@ -690,16 +721,32 @@ const MIGRATIONS = {
       anchors: t.anchors ? normalizeAnchors(t.anchors) : t.anchors,
     })),
   }),
-  // v16 → v17：模式改名（另外新增了「砲中背（雙）」，舊存檔不會有，不用處理）
+  // v16 → v17：模式改名（另外新增了「砲中背(雙)」，舊存檔不會有，不用處理）
   16: (d) => {
-    const rename = { 砲中: "砲中（雙）", 砲背: "砲背（雙）" };
+    const rename = { 砲中: "砲中(雙)", 砲背: "砲背(雙)" };
     return {
       ...d,
       teams: (d.teams || []).map((t) => (rename[t.mode] ? { ...t, mode: rename[t.mode] } : t)),
     };
   },
+  /* v17 → v18：模式名稱的括號改半形；防守定點改成每個模式各存一份。
+     normalizeAnchors 會把舊的共用 def.M／A／B 深拷貝給每個用得到的模式
+     （砲中(雙).M、砲背(雙).A、砲中背(雙).B、單舉.M、單舉.B），座標原封不動。
+     注意順序：要先改名再正規化，anchors 才會存到新的模式名底下。 */
+  17: (d) => {
+    // 模式名稱把全形括號換成半形；換完認得出來才算數，認不出來的原樣保留
+    const half = (m) => (typeof m === "string" ? m.replace(/（/g, "(").replace(/）/g, ")") : m);
+    return {
+      ...d,
+      teams: (d.teams || []).map((t) => ({
+        ...t,
+        mode: MODE_KEYS.includes(half(t.mode)) ? half(t.mode) : t.mode,
+        anchors: t.anchors ? normalizeAnchors(t.anchors) : t.anchors,
+      })),
+    };
+  },
   // 下次改結構時照這個形狀往下加：
-  // 17: (d) => ({ ...d, 新欄位: 預設值 }),
+  // 18: (d) => ({ ...d, 新欄位: 預設值 }),
 };
 
 // 只收正規點位，順手丟掉早期版本殘留的鍵（例如已廢除的 FA）
@@ -707,7 +754,7 @@ function normalizeAnchors(raw) {
   const out = {
     recv: { R5: {}, R4: {}, R3: {} },
     move: { R5: {}, R4: {}, R3: {} },
-    def: { M: {}, A: {}, B: {} },
+    def: {},
   };
   ["recv", "move"].forEach((grp) => {
     const rawGrp = (raw && raw[grp]) || {};
@@ -722,14 +769,26 @@ function normalizeAnchors(raw) {
       });
     });
   });
+  /* 防守：以模式為第一層，每個模式只存它用得到的套別。
+     來源依序找 ① 現在的結構 def[模式][套別] ② 舊的共用結構 def[套別]
+     （所以 v17 以前的座標會自動複製給每個用到它的模式）③ 更早的扁平結構 def[方向]。
+     每個點都複製成新陣列，各模式之間不會共用同一個 array。 */
   const rawDef = (raw && raw.def) || {};
-  const flat = rawDef.L && rawDef.L.FL; // 舊格式：def 直接是 {L,C,R}
-  ["M", "A", "B"].forEach((v) => ["L", "C", "R"].forEach((k) => {
-    const base = DEFAULT_ANCHORS.def[v][k];
-    const src = (flat ? rawDef[k] : (rawDef[v] || {})[k]) || {};
-    out.def[v][k] = {};
-    Object.keys(base).forEach((pt) => { out.def[v][k][pt] = src[pt] || base[pt]; });
-  }));
+  const flat = !!(rawDef.L && rawDef.L.FL); // 最早期：def 直接是 {L,C,R}
+  MODE_KEYS.forEach((m) => {
+    out.def[m] = {};
+    MODE_VARIANTS[m].forEach((v) => {
+      out.def[m][v] = {};
+      ["L", "C", "R"].forEach((k) => {
+        const base = DEFAULT_ANCHORS.def[m][v][k];
+        const src = ((rawDef[m] || {})[v] || {})[k]
+          || (flat ? rawDef[k] : (rawDef[v] || {})[k])
+          || {};
+        out.def[m][v][k] = {};
+        Object.keys(base).forEach((pt) => { out.def[m][v][k][pt] = [...(src[pt] || base[pt])]; });
+      });
+    });
+  });
   return out;
 }
 
@@ -982,7 +1041,7 @@ const recvZoneLabels = (mode, sp) => {
   for (let r = 0; r < 6; r++) {
     if (seq[(sp - 1 + r) % 6] !== "舉球") continue;
     const out = {};
-    // 簡寫看的是「這一輪實際打什麼」：砲中背（雙）的舉球輪到前排時顯示「背」
+    // 簡寫看的是「這一輪實際打什麼」：砲中背(雙)的舉球輪到前排時顯示「背」
     for (let p = 1; p <= 6; p++) {
       out[p] = ROLE_ABBR[effRole({ role: seq[(p - 1 + r) % 6] }, p, mode)] || String(p);
     }
@@ -992,33 +1051,26 @@ const recvZoneLabels = (mode, sp) => {
 };
 
 const PRESETS = {
-  "砲中（雙）": ["舉球", "大砲", "攔中", "舉球", "大砲", "攔中"],
-  "砲背（雙）": ["舉球", "副攻", "大砲", "舉球", "副攻", "大砲"],
-  // 砲中背（雙）：兩位舉球輪到前排時當副攻打（見 effRole），所以舉球永遠只在後排
+  "砲中(雙)": ["舉球", "大砲", "攔中", "舉球", "大砲", "攔中"],
+  "砲背(雙)": ["舉球", "副攻", "大砲", "舉球", "副攻", "大砲"],
+  // 砲中背(雙)：兩位舉球輪到前排時當副攻打（見 effRole），所以舉球永遠只在後排
   [MODE_B2]: ["舉球", "大砲", "攔中", "舉球", "大砲", "攔中"],
   // 單舉：全隊只有一位舉球，有三輪舉球會在後排
   單舉: ["舉球", "大砲", "攔中", "副攻", "大砲", "攔中"],
 };
 // 三套防守定點的名稱（前排三點的排法）
 const DEF_VAR_NAME = { M: "砲中", A: "砲背", B: "砲中背" };
-// 每個模式實際會用到哪幾套定點：接發看舉球會站哪些號位、防守看前排會排出哪幾種
+// 每個模式的接發要編哪些號位（舉球會站到的位置）；防守看 MODE_VARIANTS
 const MODE_RECV_POS = {
-  "砲中（雙）": [2, 3, 4],
-  "砲背（雙）": [2, 3, 4],
+  "砲中(雙)": [2, 3, 4],
+  "砲背(雙)": [2, 3, 4],
   [MODE_B2]: [1, 5, 6],          // 舉球永遠在後排
   單舉: [1, 2, 3, 4, 5, 6],      // 六輪各站一個號位
 };
-const MODE_DEF_VARS = {
-  "砲中（雙）": ["M"],
-  "砲背（雙）": ["A"],
-  [MODE_B2]: ["B"],
-  單舉: ["M", "B"],              // 前排在 中砲舉／中砲背 之間交替
-};
-const MODE_KEYS = Object.keys(PRESETS);
 // 定點頁那一排按鈕的 key（切模式時用來判斷目前這一套還在不在）
 const anchorSetKeys = (mode, rm) => [
   ...(MODE_RECV_POS[mode] || [2, 3, 4]).map((q) => `recv.${rm}.P${q}`),
-  ...(MODE_DEF_VARS[mode] || ["M", "A", "B"]).flatMap((v) => ["L", "C", "R"].map((d) => `def.${v}.${d}`)),
+  ...(MODE_VARIANTS[mode] || ["M"]).flatMap((v) => ["L", "C", "R"].map((d) => `def.${mode}.${v}.${d}`)),
 ];
 const uid = (p) => p + Math.random().toString(36).slice(2, 8);
 const newTeam = (name) => ({
@@ -1091,13 +1143,12 @@ export default function RotationBoard() {
   const court = team ? team.court : EMPTY_COURT;
   const patchTeam = (fn) => setTeams((T) => T.map((t) => (t.id === activeId ? fn(t) : t)));
   const pri = (team && team.pri) || {};
-  // 隊伍模式：引擎要靠它判斷砲中背（雙）的舉球這一輪算副攻還是舉球
+  // 隊伍模式：引擎要靠它判斷砲中背(雙)的舉球這一輪算副攻還是舉球
   const teamMode = (team && team.mode) || null;
   const backMode = (team && team.backMode) || "def";
   const setBackMode = (m) => patchTeam((t) => ({ ...t, backMode: m }));
-  // 定點與接發人數改成每隊一份；讀不到就用預設補齊，畫面不會壞
-  const anchors = (team && team.anchors && team.anchors.recv && team.anchors.def)
-    ? team.anchors : DEFAULT_ANCHORS;
+  // 定點與接發人數每隊一份；結構不完整（例如還沒升級的存檔）就用預設補齊，畫面不會壞
+  const anchors = anchorsOf(team);
   // 個別微調：{ "輪次:情境:號位": [x,y] }，只蓋掉那一格
   const tweaks = (team && team.tweaks) || {};
   // 自由球員本人（全隊一位）；沒指定時圖上仍顯示 L，記號記成「自由球員」
@@ -1132,7 +1183,7 @@ export default function RotationBoard() {
   const recvMode = (team && team.recvMode) || "R5";
   const setAnchors = (u) =>
     patchTeam((t) => {
-      const cur = (t.anchors && t.anchors.recv && t.anchors.def) ? t.anchors : DEFAULT_ANCHORS;
+      const cur = anchorsOf(t);
       return { ...t, anchors: typeof u === "function" ? u(cur) : u };
     });
   const setRecvMode = (m) => patchTeam((t) => ({ ...t, recvMode: m }));
@@ -1140,7 +1191,7 @@ export default function RotationBoard() {
   const copyAnchorsFrom = (srcId) => {
     const src = teams.find((t) => t.id === srcId);
     if (!src) return;
-    const a = (src.anchors && src.anchors.recv && src.anchors.def) ? src.anchors : DEFAULT_ANCHORS;
+    const a = anchorsOf(src);
     patchTeam((t) => ({ ...t, anchors: JSON.parse(JSON.stringify(a)), recvMode: src.recvMode || "R5" }));
   };
   const setPri = (r, slot, id) =>
@@ -1556,9 +1607,15 @@ export default function RotationBoard() {
       ball: null,
       grp: "接發",
     })),
-    ...(MODE_DEF_VARS[aMode] || ["M", "A", "B"]).flatMap((v) =>
+    // 防守的 key 帶模式（def.<模式>.<套別>.<方向>），拖動時才會寫到該模式自己那一份
+    ...(MODE_VARIANTS[aMode] || ["M"]).flatMap((v, i, vs) =>
       DEF_LABEL.map(([d, lb]) => ({
-        key: `def.${v}.${d}`, label: lb, get: (A) => A.def[v][d], ball: d, grp: DEF_VAR_NAME[v],
+        key: `def.${aMode}.${v}.${d}`,
+        label: lb,
+        get: (A) => defAnchors(A, aMode, v)[d],
+        ball: d,
+        // 只有一套就叫「防守」，兩套以上才標是哪一套（單舉）
+        grp: vs.length > 1 ? `防守(${DEF_VAR_NAME[v]})` : "防守",
       }))),
   ];
   // 依 grp 分排（接發一排、每套防守各一排），排的數量會隨模式改變
@@ -1572,7 +1629,7 @@ export default function RotationBoard() {
   const curSet = cur.get(anchors) || {};
   // 前排三點的名稱隨防守套數而不同：
   // 砲中 砲／中／舉・砲背 砲／舉／背・砲中背 砲／中／背
-  const defVar = curKey.startsWith("def.") ? curKey.split(".")[1] : null;
+  const defVar = curKey.startsWith("def.") ? curKey.split(".")[2] : null; // def.<模式>.<套別>.<方向>
   const ANCHOR_LABEL = {
     FL: "砲", FC: defVar === "A" ? "舉" : "中", FR: defVar === "M" ? "舉" : "背",
     BL: "後排", BC: "後排", BR: "後排",
@@ -2953,7 +3010,7 @@ export default function RotationBoard() {
           </div>
           {/* 第一行：要編哪一組定點。純篩選，不會動到 team.mode、場上陣容與名單 */}
           <div className="flex items-center gap-1 mb-2 flex-wrap">
-            <span style={{ fontSize: 11, color: C.muted, width: 30, flexShrink: 0 }}>模式</span>
+            <span style={{ fontSize: 11, color: C.muted, width: 72, flexShrink: 0, whiteSpace: "nowrap" }}>模式</span>
             {MODE_KEYS.map((m) => (
               <button key={m} onClick={() => switchAnchorMode(m)}
                 style={{ ...btn, fontSize: 11, padding: "5px 8px", background: aMode === m ? C.ink : C.panel, color: aMode === m ? C.paper : C.ink }}>
@@ -2964,7 +3021,7 @@ export default function RotationBoard() {
           </div>
           {/* 第二行：接發人數（全圖也跟著換） */}
           <div className="flex items-center gap-1 mb-2 flex-wrap">
-            <span style={{ fontSize: 11, color: C.muted, width: 30, flexShrink: 0 }}>人數</span>
+            <span style={{ fontSize: 11, color: C.muted, width: 72, flexShrink: 0, whiteSpace: "nowrap" }}>人數</span>
             {[["R3", "3人接發"], ["R4", "4人接發"], ["R5", "5人接發"]].map(([m, l]) => (
               <button key={m} onClick={() => switchRecvMode(m)}
                 style={{ ...btn, fontSize: 11, padding: "5px 8px", background: recvMode === m ? C.ink : C.panel, color: recvMode === m ? C.paper : C.ink }}>
@@ -2976,7 +3033,7 @@ export default function RotationBoard() {
           {/* 第三行起：這個模式真正會用到的接發與防守套別 */}
           {EDIT_ROWS.map(([g, sets]) => (
             <div key={g} className="flex items-center gap-1 mb-2 flex-wrap">
-              <span style={{ fontSize: 11, color: C.muted, width: 30, flexShrink: 0 }}>{g}</span>
+              <span style={{ fontSize: 11, color: C.muted, width: 72, flexShrink: 0, whiteSpace: "nowrap" }}>{g}</span>
               {sets.map((s) => (
                 <button key={s.key} onClick={() => setEditKey(s.key)}
                   style={{ ...btn, fontSize: 11, padding: "5px 8px", background: curKey === s.key ? C.ink : C.panel, color: curKey === s.key ? C.paper : C.ink }}>
