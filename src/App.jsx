@@ -1483,6 +1483,7 @@ export default function RotationBoard() {
   // 前排三點的名稱隨防守套數而不同：
   // 砲中 砲／中／舉・砲背 砲／舉／背・砲中背 砲／中／背
   const defVar = curKey.startsWith("def.") ? curKey.split(".")[1] : null;
+  const DEF_VAR_NAME = { M: "砲中", A: "砲背", B: "砲中背" };
   const ANCHOR_LABEL = {
     FL: "砲", FC: defVar === "A" ? "舉" : "中", FR: defVar === "M" ? "舉" : "背",
     BL: "後排", BC: "後排", BR: "後排",
@@ -2893,44 +2894,50 @@ export default function RotationBoard() {
               ))}
             </div>
           ))}
-          <div className="flex flex-wrap justify-center items-start gap-3">
+          <div style={{ display: "flex", gap: 16, alignItems: "flex-start", flexWrap: "wrap", justifyContent: "center" }}>
             <div className="flex justify-center" onPointerMove={onPointerMove}
               onPointerUp={() => setDrag(null)} onPointerLeave={() => setDrag(null)}>
               <Court spots={editSpots} labels ball={cur.ball} size={260}
                 svgRef={svgRef} onDown={(e, k) => { e.preventDefault(); setDrag(k); }} />
             </div>
-            {/* 原始輪轉排序：純參考，不能點也不能拖。桌機在球場右邊，手機自動掉到球場下面 */}
+            {/* 輪轉排序：跟著目前選到的那一套走（recvLab 就是 recvZoneLabels 的結果）。
+                純參考，不能點也不能拖；桌機在球場右邊，手機靠 flexWrap 掉到球場下面 */}
             <div style={{
-              background: C.paper, border: `1px solid ${C.edge}`, borderRadius: 10,
-              padding: "8px 10px", minWidth: 136, maxWidth: 200,
+              minWidth: 190, background: C.paper, border: `1px solid ${C.edge}`,
+              borderRadius: 10, padding: 12,
             }}>
-              {team.mode ? (
-                <>
-                  <div style={{ fontSize: 12.5, fontWeight: 800, marginBottom: 6 }}>
-                    {team.mode}
-                    <span style={{ fontSize: 9.5, fontWeight: 400, color: C.muted, marginLeft: 4 }}>原始輪轉排序</span>
-                  </div>
-                  {[["前排", FRONT], ["後排", BACK]].map(([lab, zs]) => (
-                    <div key={lab} className="flex items-center gap-1" style={{ marginBottom: 3 }}>
-                      <span style={{ fontSize: 9.5, color: C.muted, width: 22, flexShrink: 0 }}>{lab}</span>
-                      {zs.map((p) => (
-                        <span key={p} style={{
-                          flex: 1, textAlign: "center", padding: "2px 0", borderRadius: 6,
-                          background: C.panel, border: `1px solid ${C.edge}`,
-                        }}>
-                          <span style={{ fontFamily: MONO, fontSize: 9.5, color: C.muted }}>{p}</span>
-                          <span style={{ fontSize: 12, fontWeight: 800, marginLeft: 2 }}>
-                            {ROLE_ABBR[PRESETS[team.mode][p - 1]] || "？"}
-                          </span>
-                        </span>
-                      ))}
-                    </div>
-                  ))}
-                </>
-              ) : (
-                <div style={{ fontSize: 10.5, color: C.muted, lineHeight: 1.7 }}>
+              <div style={{ fontSize: 12, fontWeight: 800 }}>輪轉排序</div>
+              {!team.mode ? (
+                <div style={{ fontSize: 10.5, color: C.muted, lineHeight: 1.7, marginTop: 6 }}>
                   尚未選擇模式，到①名單按一下砲中／砲背／單舉
                 </div>
+              ) : (
+                <>
+                  <div style={{ fontSize: 10.5, color: C.muted, marginTop: 2, marginBottom: 8 }}>
+                    {/* 接發那幾套跟著隊伍模式走，防守那幾套只標自己的套別（砲中／砲背／砲中背） */}
+                    {DEF_VAR_NAME[defVar] || team.mode}・{cur.label}
+                  </div>
+                  {recvLab ? (
+                    <>
+                      {[["前排", FRONT], ["後排", BACK]].map(([lab, zs]) => (
+                        <div key={lab} className="flex items-start" style={{ marginBottom: 6 }}>
+                          <span style={{ fontSize: 10, color: C.muted, width: 28, flexShrink: 0, paddingTop: 13 }}>{lab}</span>
+                          {zs.map((z) => (
+                            <span key={z} style={{ width: 40, textAlign: "center" }}>
+                              <span style={{ display: "block", fontFamily: MONO, fontSize: 9.5, color: C.muted }}>{z}號</span>
+                              <span style={{ display: "block", fontSize: 16, fontWeight: 800, lineHeight: 1.2 }}>{recvLab[z]}</span>
+                            </span>
+                          ))}
+                        </div>
+                      ))}
+                      <div style={{ fontSize: 10, color: C.muted, marginTop: 2 }}>左到右為場上由左至右</div>
+                    </>
+                  ) : (
+                    <div style={{ fontSize: 10.5, color: C.muted, lineHeight: 1.7 }}>
+                      {isRecv ? "這個模式排不出這一套" : "防守套別不對應特定輪次"}
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>
