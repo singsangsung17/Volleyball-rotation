@@ -13,9 +13,9 @@ const ROLE_ABBR = { 舉球: "舉", 大砲: "砲", 攔中: "中", 副攻: "背", 
 /* ============================================================
    PART 1 — 定點表（全系統的座標真相）
    接發＝號位制（1–6）　防守＝角色制（FL/FC/FR/BL/BC/BR）
-   防守分三套：A＝砲背（前排有副攻）、M＝砲中（前排有攔中）、B＝砲中背（前排沒有舉球）
+   防守分三套：A＝砲背（前排有副攻）、M＝砲中（前排有攔中）、B＝單舉（前排沒有舉球）
    砲中：砲(左) 中(中) 舉(右)　／　砲背：砲(左) 舉(中) 背(右)
-   砲中背：砲(左) 中(中) 背(右)（只有單舉會輪到）
+   單舉：砲(左) 中(中) 背(右)（只有單舉會輪到）
    發球圖用固定的平行陣（SERVE_GRID），格子分配與防守完全同一套規則；
    1號位是發球員，站在端線外
    ============================================================ */
@@ -90,7 +90,7 @@ const RECV_BACK_OVERRIDE = {
     );
   });
 });
-// 第三套防守「砲中背」：前排沒有舉球時用。砲與中沿用砲中那套，背沿用砲背那套的右格
+// 第三套防守「單舉」：前排沒有舉球時用。砲與中沿用砲中那套，背沿用砲背那套的右格
 DEFAULT_ANCHORS.def.B = Object.fromEntries(["L", "C", "R"].map((d) => [d, {
   ...DEFAULT_ANCHORS.def.M[d],
   FR: [...DEFAULT_ANCHORS.def.A[d].FR],
@@ -106,7 +106,7 @@ const RECV_N = { R3: "3", R4: "4", R5: "5" };
    PART 2 — 純引擎
    ============================================================ */
 const FRONT = [4, 3, 2]; // 左4 中3 右2
-// 前排沒有舉球（單舉的那三輪）→「砲中背」；前排有副攻 →「砲背」；其餘 →「砲中」
+// 前排沒有舉球（單舉的那三輪）→「單舉」；前排有副攻 →「砲背」；其餘 →「砲中」
 const frontVariant = (occ) =>
   !FRONT.some((p) => occ[p].role === "舉球") ? "B"
     : FRONT.some((p) => occ[p].role === "副攻") ? "A" : "M";
@@ -646,7 +646,7 @@ const MIGRATIONS = {
     anchors: undefined,
     recvMode: undefined,
   }),
-  // v15 → v16：新增三人接發、舉球在後排的接發套數（P1/P5/P6）與第三套防守「砲中背」。
+  // v15 → v16：新增三人接發、舉球在後排的接發套數（P1/P5/P6）與第三套防守「單舉」。
   // 重跑一次 normalizeAnchors 就會補上這些新結構的預設值，既有座標原封不動。
   15: (d) => ({
     ...d,
@@ -1500,7 +1500,7 @@ export default function RotationBoard() {
   const curKey = cur.key; // editKey 可能過期，實際生效的是這個
   const curSet = cur.get(anchors) || {};
   // 前排三點的名稱隨防守套數而不同：
-  // 砲中 砲／中／舉・砲背 砲／舉／背・砲中背 砲／中／背
+  // 砲中 砲／中／舉・砲背 砲／舉／背・單舉 砲／中／背
   const defVar = curKey.startsWith("def.") ? curKey.split(".")[1] : null;
   const ANCHOR_LABEL = {
     FL: "砲", FC: defVar === "A" ? "舉" : "中", FR: defVar === "M" ? "舉" : "背",
@@ -2900,7 +2900,7 @@ export default function RotationBoard() {
             ["接發", EDIT_SETS.slice(0, RECV_POS.length)],
             ["砲背", EDIT_SETS.slice(RECV_POS.length, RECV_POS.length + 3)],
             ["砲中", EDIT_SETS.slice(RECV_POS.length + 3, RECV_POS.length + 6)],
-            ["砲中背", EDIT_SETS.slice(RECV_POS.length + 6)],
+            ["單舉", EDIT_SETS.slice(RECV_POS.length + 6)],
           ].map(([g, sets]) => (
             <div key={g} className="flex items-center gap-1 mb-2">
               <span style={{ fontSize: 11, color: C.muted, width: 30, flexShrink: 0 }}>{g}</span>
@@ -2922,10 +2922,10 @@ export default function RotationBoard() {
             4人接發時把不接的那兩位拖到網前即可；<b>3人接發目前只排開舉球與副攻，還剩 4 人在接</b>，
             第三個不接發的人請自行拖走。單舉有三輪舉球在後排，接發會多出「舉球在1／5／6號位」三套，
             預設值是暫定的基準陣型，請拉點校準。
-            防守分三套：<b>砲背</b>＝前排有副攻、<b>砲中</b>＝前排有攔中、<b>砲中背</b>＝前排沒有舉球
+            防守分三套：<b>砲背</b>＝前排有副攻、<b>砲中</b>＝前排有攔中、<b>單舉</b>＝前排沒有舉球
             （單舉才會輪到；前兩套互為對角，雙舉時每輪只會出現一個）。前排三點：
             砲中＝砲（左）・中（中）・舉（右）；砲背＝砲（左）・<b>舉（中）</b>・<b>背（右）</b>；
-            砲中背＝砲（左）・中（中）・<b>背（右）</b>；
+            單舉＝砲（左）・中（中）・<b>背（右）</b>；
             後排點按照基本輪轉順序，除非適用特殊規則。
           </div>
           <div className="flex gap-2 mt-2">
