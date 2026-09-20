@@ -5,7 +5,9 @@ import { useState, useMemo, useRef, useEffect } from "react";
    引擎只看「組」：舉球=S、攔中/副攻=M、大砲/自由=X（同組可互為對角）
    前排中間那位是攔中或副攻，決定防守用「砲中」還是「砲背」那一套定點
    ============================================================ */
-const ROLE_LIST = ["舉球", "大砲", "副攻", "攔中", "自由"];
+// 名單頁能選的位置。「自由」已改用每位球員的 libero 開關指定，這裡不再列出，
+// 但 GROUP／DEFAULT_BACK_ROLE 仍保留它，舊存檔裡的「自由」不會壞掉
+const ROLE_LIST = ["舉球", "大砲", "副攻", "攔中"];
 const GROUP = { 舉球: "S", 攔中: "M", 副攻: "M", 大砲: "X", 自由: "X" };
 // 全圖切到「位置」模式時圈圈裡顯示的簡稱
 const ROLE_ABBR = { 舉球: "舉", 大砲: "砲", 攔中: "中", 副攻: "背", 自由: "自" };
@@ -13,9 +15,9 @@ const ROLE_ABBR = { 舉球: "舉", 大砲: "砲", 攔中: "中", 副攻: "背", 
 /* ============================================================
    PART 1 — 定點表（全系統的座標真相）
    接發＝號位制（1–6）　防守＝角色制（FL/FC/FR/BL/BC/BR）
-   防守分三套：A＝砲背（前排有副攻）、M＝砲中（前排有攔中）、B＝單舉（前排沒有舉球）
+   防守分三套：A＝砲背（前排有副攻）、M＝砲中（前排有攔中）、B＝砲中背（前排沒有舉球）
    砲中：砲(左) 中(中) 舉(右)　／　砲背：砲(左) 舉(中) 背(右)
-   單舉：砲(左) 中(中) 背(右)（只有單舉會輪到）
+   砲中背：砲(左) 中(中) 背(右)（砲中背（雙）與單舉會輪到）
    發球圖用固定的平行陣（SERVE_GRID），格子分配與防守完全同一套規則；
    1號位是發球員，站在端線外
    ============================================================ */
@@ -68,7 +70,7 @@ const DEFAULT_ANCHORS = {
       C: { FL: [0.292, 0.326], FC: [0.686, 0.329], FR: [0.505, 0.077], BL: [0.235, 0.708], BC: [0.5, 0.88], BR: [0.786, 0.687] },
       R: { FL: [0.168, 0.364], FC: [0.697, 0.313], FR: [0.854, 0.06], BL: [0.303, 0.641], BC: [0.568, 0.816], BR: [0.869, 0.844] },
     },
-    // B＝單舉（前排沒有舉球，只有單舉會輪到）：砲(左) 中(中) 背(右)
+    // B＝砲中背（前排沒有舉球）：砲(左) 中(中) 背(右)
     B: {
       L: { FL: [0.153, 0.043], FC: [0.294, 0.31], FR: [0.826, 0.348], BL: [0.171, 0.841], BC: [0.475, 0.798], BR: [0.703, 0.656] },
       C: { FL: [0.294, 0.334], FC: [0.509, 0.067], FR: [0.728, 0.339], BL: [0.235, 0.708], BC: [0.5, 0.88], BR: [0.786, 0.687] },
@@ -87,11 +89,19 @@ const RECV_N = { R3: "3", R4: "4", R5: "5" };
    PART 2 — 純引擎
    ============================================================ */
 const FRONT = [4, 3, 2]; // 左4 中3 右2
-// 前排沒有舉球（單舉的那三輪）→「單舉」；前排有副攻 →「砲背」；其餘 →「砲中」
-const frontVariant = (occ) =>
-  !FRONT.some((p) => occ[p].role === "舉球") ? "B"
-    : FRONT.some((p) => occ[p].role === "副攻") ? "A" : "M";
 const BACK = [5, 6, 1];  // 左5 中6 右1
+/* 砲中背（雙）：兩位舉球都是雙重身份——輪到前排時當副攻打，輪到後排才是舉球。
+   名單上他們的位置一律是「舉球」，引擎要看的是「這一輪實際打什麼」，
+   所以全檔一律用 effRole(e, pos, mode) 取角色，不要直接讀 e.role。 */
+const MODE_B2 = "砲中背（雙）";
+const effRole = (e, pos, mode) =>
+  (!e ? null
+    : mode === MODE_B2 && e.role === "舉球" && FRONT.includes(pos) ? "副攻"
+      : e.role);
+// 前排沒有舉球 →「砲中背」；前排有副攻 →「砲背」；其餘 →「砲中」
+const frontVariant = (occ, mode) =>
+  !FRONT.some((p) => effRole(occ[p], p, mode) === "舉球") ? "B"
+    : FRONT.some((p) => effRole(occ[p], p, mode) === "副攻") ? "A" : "M";
 const PIN_SLOT = { L: "BL", C: "BC", R: "BR" };
 const PIN_NAME = { L: "守左", C: "守中", R: "守右" };
 // 前排的點只要圓圈碰得到網線（半徑 9／100），就視為那一套的攔網球員
@@ -102,20 +112,36 @@ const FRONT_SLOTS = ["FL", "FC", "FR"];
 // ① 個人指定的格子 → ② 依基本輪轉順序遞補
 // 同一格若兩人搶，先輪到的人（5→6→1）取得，另一人往下一層遞補；三格必定填滿
 /* 後排防守位置有三種模式：
-   def    預設   ── 依位置：大砲守中、攔中／副攻守左、舉球守右、自由球員守左
+   def    預設   ── 依隊伍模式查 MODE_BACK_ROLE（沒選模式時用 DEFAULT_BACK_ROLE）
    none   不指定 ── 全部依基本輪轉順序
    custom 特     ── 逐人指定，撞格的輪次由使用者用 pri 排除
    pri：{ "輪次:格子": 球員id } */
+// 沒選過模式時的後備表（也留著給舊資料裡的「自由」位置）
 const DEFAULT_BACK_ROLE = { 大砲: "C", 攔中: "L", 副攻: "L", 舉球: "R", 自由: "L" };
+// 「預設」後排守位：每個模式各一張表（位置 → 格子）
+const MODE_BACK_ROLE = {
+  "砲中（雙）": { 攔中: "L", 大砲: "C", 舉球: "R" },
+  "砲背（雙）": { 副攻: "L", 大砲: "C", 舉球: "R" },
+  "砲中背（雙）": { 攔中: "L", 大砲: "C", 舉球: "R" },
+  單舉: { 攔中: "L", 大砲: "C", 舉球: "R", 副攻: "R" },
+};
+const backRoleTable = (teamMode) => MODE_BACK_ROLE[teamMode] || DEFAULT_BACK_ROLE;
 const LIBERO_BACK = "L"; // 自由球員替上場時守左
-const backWant = (e, pos, serve, mode) => {
+const backWant = (e, pos, serve, mode, teamMode) => {
   if (!e || mode === "none") return null;
   if (mode === "custom") return e.back || null;
   if (e.libero && !(serve && pos === 1)) return LIBERO_BACK; // 這一格其實是自由球員
-  return DEFAULT_BACK_ROLE[e.role] || null;
+  return backRoleTable(teamMode)[effRole(e, pos, teamMode)] || null;
 };
 
-function backOrder(occ, r, pri, mode, serve, ovBack) {
+// 「預設」那段說明文字，跟著模式走（沒選模式就照後備表講）
+const backRuleText = (teamMode) =>
+  Object.keys(backRoleTable(teamMode))
+    .filter((r) => r !== "自由")
+    .map((r) => `${r}${PIN_NAME[backRoleTable(teamMode)[r]]}`)
+    .join("・") + `・自由球員${PIN_NAME[LIBERO_BACK]}`;
+
+function backOrder(occ, r, pri, mode, serve, ovBack, teamMode) {
   // ovBack＝這一球臨時指定的後排三人（依 左中右），優先於所有規則
   if (ovBack && ovBack.length === 3) {
     const byId = {};
@@ -127,7 +153,7 @@ function backOrder(occ, r, pri, mode, serve, ovBack) {
   const slotted = {};
   const done = new Set();
   // 每一格有幾個人想守
-  const wantOf = players.map((pl) => backWant(pl.e, pl.pos, serve, mode));
+  const wantOf = players.map((pl) => backWant(pl.e, pl.pos, serve, mode, teamMode));
   const wantCount = {};
   wantOf.forEach((w) => { if (w) wantCount[w] = (wantCount[w] || 0) + 1; });
   // ① 只有真的撞格時才套用優先權，而且只能指定「想守那一格」的人。
@@ -155,14 +181,14 @@ function backOrder(occ, r, pri, mode, serve, ovBack) {
 
 // 同排三人規則撞格：列出每一輪的衝突
 // 回傳 [{ r, slot, players:[球員] }]：某一輪同一格有兩人以上想守
-function backConflicts(lineup, mode) {
+function backConflicts(lineup, mode, teamMode) {
   const out = [];
   for (let r = 0; r < 6; r++) {
     const occ = occupancy(lineup, r);
     const want = {};
     BACK.forEach((p) => {
       const e = occ[p];
-      const k = backWant(e, p, false, mode);
+      const k = backWant(e, p, false, mode, teamMode);
       if (k) (want[k] = want[k] || []).push(e);
     });
     Object.keys(want).forEach((k) => {
@@ -178,8 +204,25 @@ function occupancy(lineup, r) {
   return occ;
 }
 
-function frontByRole(occ, set) {
-  const roles = FRONT.map((p) => occ[p].role);
+// 位置簡寫的編號：同位置有兩人時標 1／2（砲1／砲2）。
+// 砲中背（雙）的兩位舉球不編號——他們一前一後，簡寫本來就會是「背」與「舉」
+function roleNumbers(court, byId, teamMode) {
+  const group = {};
+  court.forEach((id) => {
+    const e = byId[id];
+    if (!e || !e.role) return;
+    (group[e.role] = group[e.role] || []).push(id);
+  });
+  const out = {};
+  Object.entries(group).forEach(([role, ids]) => {
+    const skip = teamMode === MODE_B2 && role === "舉球";
+    ids.forEach((id, i) => { out[id] = ids.length > 1 && !skip ? String(i + 1) : ""; });
+  });
+  return out;
+}
+
+function frontByRole(occ, set, mode) {
+  const roles = FRONT.map((p) => effRole(occ[p], p, mode));
   if (roles.some((r) => !GROUP[r])) return { err: "前排有位置未定" };
   if (roles.filter((r) => GROUP[r] === "X").length !== 1) return { err: "前排大砲不是 1 人" };
   // 前排三格，三種組合：
@@ -188,13 +231,13 @@ function frontByRole(occ, set) {
   //   中＋背＋砲：砲→左、中→中、背→右（單舉前排沒有舉球時）
   const n = (r) => roles.filter((x) => x === r).length;
   let slotFor;
-  if (n("舉球") === 1 && n("副攻") === 1) slotFor = (e) => (e.role === "副攻" ? "FR" : e.role === "舉球" ? "FC" : "FL");
-  else if (n("舉球") === 1 && n("攔中") === 1) slotFor = (e) => (e.role === "舉球" ? "FR" : e.role === "攔中" ? "FC" : "FL");
-  else if (n("攔中") === 1 && n("副攻") === 1) slotFor = (e) => (e.role === "副攻" ? "FR" : e.role === "攔中" ? "FC" : "FL");
+  if (n("舉球") === 1 && n("副攻") === 1) slotFor = (rl) => (rl === "副攻" ? "FR" : rl === "舉球" ? "FC" : "FL");
+  else if (n("舉球") === 1 && n("攔中") === 1) slotFor = (rl) => (rl === "舉球" ? "FR" : rl === "攔中" ? "FC" : "FL");
+  else if (n("攔中") === 1 && n("副攻") === 1) slotFor = (rl) => (rl === "副攻" ? "FR" : rl === "攔中" ? "FC" : "FL");
   else return { err: "前排角色組合不符" };
   return {
-    spots: FRONT.map((p) => {
-      const k = slotFor(occ[p]);
+    spots: FRONT.map((p, i) => {
+      const k = slotFor(roles[i]);
       return { pos: p, e: occ[p], xy: set[k], slot: k }; // slot 要留著，攔網選人靠它
     }),
   };
@@ -205,14 +248,14 @@ function frontByRole(occ, set) {
 const liberoIn = (e, pos, keepServer) => !!(e && e.libero) && BACK.includes(pos) && !(keepServer && pos === 1);
 
 // 站位解析：{ok, spots:[{pos, e, xy, lib}]} 或 {ok:false, reason}
-function formation(lineup, r, sceneId, A, recvMode, pri, backMode, weServe, ovBack) {
+function formation(lineup, r, sceneId, A, recvMode, pri, backMode, weServe, ovBack, teamMode) {
   if (lineup.length !== 6 || lineup.some((e) => !e)) return { ok: false, reason: "名單未滿 6 人" };
   const occ = occupancy(lineup, r);
 
   if (sceneId === "recv") {
-    // 前排剛好一個舉球就用他的號位；單舉有三輪舉球在後排，改用全場唯一那位
-    const fs = FRONT.filter((p) => occ[p].role === "舉球");
-    const all = [1, 2, 3, 4, 5, 6].filter((p) => occ[p].role === "舉球");
+    // 前排剛好一個舉球就用他的號位；舉球在後排時（單舉、砲中背（雙））改用全場唯一那位
+    const fs = FRONT.filter((p) => effRole(occ[p], p, teamMode) === "舉球");
+    const all = [1, 2, 3, 4, 5, 6].filter((p) => effRole(occ[p], p, teamMode) === "舉球");
     const sp = fs.length === 1 ? fs[0] : all.length === 1 ? all[0] : null;
     if (!sp) return { ok: false, reason: fs.length ? `前排舉球 ${fs.length} 人` : `全場舉球 ${all.length} 人` };
     const set = (A.recv[recvMode || "R5"] || A.recv.R5)["P" + sp];
@@ -231,11 +274,11 @@ function formation(lineup, r, sceneId, A, recvMode, pri, backMode, weServe, ovBa
     sceneId === "serve" ? true
       : sceneId === "recv" ? false
         : weServe === undefined ? true : !!weServe;
-  const set = useGrid ? SERVE_GRID : A.def[frontVariant(occ)][DEF_MAP[sceneId]];
-  const f = frontByRole(occ, set);
+  const set = useGrid ? SERVE_GRID : A.def[frontVariant(occ, teamMode)][DEF_MAP[sceneId]];
+  const f = frontByRole(occ, set, teamMode);
   if (f.err) return { ok: false, reason: f.err };
   const spots = [...f.spots];
-  backOrder(occ, r, pri, backMode, keepServer, ovBack).forEach((b, i) => {
+  backOrder(occ, r, pri, backMode, keepServer, ovBack, teamMode).forEach((b, i) => {
     const k = ["BL", "BC", "BR"][i];
     const xy = sceneId === "serve" && b.pos === 1 ? SERVE_GRID.SV : set[k];
     spots.push({ ...b, xy, slot: k, lib: liberoIn(b.e, b.pos, keepServer) });
@@ -523,7 +566,7 @@ const BALL_X = { L: 0.12, C: 0.5, R: 0.88 };
 const toPx = (x) => x * 100;
 const toPy = (y) => 30 + y * 100;
 const STORAGE_KEY = "volley-squad-v1";
-const STORAGE_V = 16; // 每次改變存檔結構就 +1，並在 MIGRATIONS 補一步
+const STORAGE_V = 17; // 每次改變存檔結構就 +1，並在 MIGRATIONS 補一步
 
 /* ---- 存檔位置 ----------------------------------------------------------
    Claude 內建環境有 window.storage（每位使用者各自一份，預設 shared=false）。
@@ -627,7 +670,7 @@ const MIGRATIONS = {
     anchors: undefined,
     recvMode: undefined,
   }),
-  // v15 → v16：新增三人接發、舉球在後排的接發套數（P1/P5/P6）與第三套防守「單舉」。
+  // v15 → v16：新增三人接發、舉球在後排的接發套數（P1/P5/P6）與第三套防守「砲中背」。
   // 重跑一次 normalizeAnchors 就會補上這些新結構的預設值，既有座標原封不動。
   15: (d) => ({
     ...d,
@@ -636,8 +679,16 @@ const MIGRATIONS = {
       anchors: t.anchors ? normalizeAnchors(t.anchors) : t.anchors,
     })),
   }),
+  // v16 → v17：模式改名（另外新增了「砲中背（雙）」，舊存檔不會有，不用處理）
+  16: (d) => {
+    const rename = { 砲中: "砲中（雙）", 砲背: "砲背（雙）" };
+    return {
+      ...d,
+      teams: (d.teams || []).map((t) => (rename[t.mode] ? { ...t, mode: rename[t.mode] } : t)),
+    };
+  },
   // 下次改結構時照這個形狀往下加：
-  // 16: (d) => ({ ...d, 新欄位: 預設值 }),
+  // 17: (d) => ({ ...d, 新欄位: 預設值 }),
 };
 
 // 只收正規點位，順手丟掉早期版本殘留的鍵（例如已廢除的 FA）
@@ -920,18 +971,44 @@ const recvZoneLabels = (mode, sp) => {
   for (let r = 0; r < 6; r++) {
     if (seq[(sp - 1 + r) % 6] !== "舉球") continue;
     const out = {};
-    for (let p = 1; p <= 6; p++) out[p] = ROLE_ABBR[seq[(p - 1 + r) % 6]] || String(p);
+    // 簡寫看的是「這一輪實際打什麼」：砲中背（雙）的舉球輪到前排時顯示「背」
+    for (let p = 1; p <= 6; p++) {
+      out[p] = ROLE_ABBR[effRole({ role: seq[(p - 1 + r) % 6] }, p, mode)] || String(p);
+    }
     return out;
   }
   return null;
 };
 
 const PRESETS = {
-  砲中: ["舉球", "大砲", "攔中", "舉球", "大砲", "攔中"],
-  砲背: ["舉球", "副攻", "大砲", "舉球", "副攻", "大砲"],
-  // 單舉：全隊只有一位舉球，有三輪舉球會在後排（接發用 P1／P5／P6 那三套）
+  "砲中（雙）": ["舉球", "大砲", "攔中", "舉球", "大砲", "攔中"],
+  "砲背（雙）": ["舉球", "副攻", "大砲", "舉球", "副攻", "大砲"],
+  // 砲中背（雙）：兩位舉球輪到前排時當副攻打（見 effRole），所以舉球永遠只在後排
+  [MODE_B2]: ["舉球", "大砲", "攔中", "舉球", "大砲", "攔中"],
+  // 單舉：全隊只有一位舉球，有三輪舉球會在後排
   單舉: ["舉球", "大砲", "攔中", "副攻", "大砲", "攔中"],
 };
+// 三套防守定點的名稱（前排三點的排法）
+const DEF_VAR_NAME = { M: "砲中", A: "砲背", B: "砲中背" };
+// 每個模式實際會用到哪幾套定點：接發看舉球會站哪些號位、防守看前排會排出哪幾種
+const MODE_RECV_POS = {
+  "砲中（雙）": [2, 3, 4],
+  "砲背（雙）": [2, 3, 4],
+  [MODE_B2]: [1, 5, 6],          // 舉球永遠在後排
+  單舉: [1, 2, 3, 4, 5, 6],      // 六輪各站一個號位
+};
+const MODE_DEF_VARS = {
+  "砲中（雙）": ["M"],
+  "砲背（雙）": ["A"],
+  [MODE_B2]: ["B"],
+  單舉: ["M", "B"],              // 前排在 中砲舉／中砲背 之間交替
+};
+const MODE_KEYS = Object.keys(PRESETS);
+// 定點頁那一排按鈕的 key（切模式時用來判斷目前這一套還在不在）
+const anchorSetKeys = (mode, rm) => [
+  ...(MODE_RECV_POS[mode] || [2, 3, 4]).map((q) => `recv.${rm}.P${q}`),
+  ...(MODE_DEF_VARS[mode] || ["M", "A", "B"]).flatMap((v) => ["L", "C", "R"].map((d) => `def.${v}.${d}`)),
+];
 const uid = (p) => p + Math.random().toString(36).slice(2, 8);
 const newTeam = (name) => ({
   id: uid("t"), name, roster: [], court: [...EMPTY_COURT], mode: null, pri: {}, backMode: "def", tweaks: {}, liberoId: null,
@@ -991,6 +1068,7 @@ export default function RotationBoard() {
   const [note, setNote] = useState("");
 
   const [editKey, setEditKey] = useState("recv.R5.P2");
+  const [anchorMode, setAnchorMode] = useState(null); // 定點頁在編哪一組定點（不影響 team.mode）
   const [drag, setDrag] = useState(null);
   const [zDrag, setZDrag] = useState(null);
   const zRef = useRef(null);
@@ -1002,6 +1080,8 @@ export default function RotationBoard() {
   const court = team ? team.court : EMPTY_COURT;
   const patchTeam = (fn) => setTeams((T) => T.map((t) => (t.id === activeId ? fn(t) : t)));
   const pri = (team && team.pri) || {};
+  // 隊伍模式：引擎要靠它判斷砲中背（雙）的舉球這一輪算副攻還是舉球
+  const teamMode = (team && team.mode) || null;
   const backMode = (team && team.backMode) || "def";
   const setBackMode = (m) => patchTeam((t) => ({ ...t, backMode: m }));
   // 定點與接發人數改成每隊一份；讀不到就用預設補齊，畫面不會壞
@@ -1016,14 +1096,14 @@ export default function RotationBoard() {
   const setLiberoId = (id) => patchTeam((t) => ({ ...t, liberoId: id || null }));
   const tweakKey = (r, scene, pos) => `${r}:${scene}:${pos}`;
   const form = (lu, r, scene, weServe, ovBack) => {
-    const f = formation(lu, r, scene, anchors, recvMode, pri, backMode, weServe, ovBack);
+    const f = formation(lu, r, scene, anchors, recvMode, pri, backMode, weServe, ovBack, teamMode);
     if (!f.ok) return f;
     return {
       ...f,
       spots: f.spots.map((s) => {
         const t = tweaks[tweakKey(r, scene, s.pos)];
         const s2 = t ? { ...s, xy: t } : s;
-        const s3 = s2.e && roleTag[s2.e.id] ? { ...s2, tag: roleTag[s2.e.id] } : s2;
+        const s3 = s2.e ? { ...s2, tag: tagAt(s2.e, s2.pos) } : s2;
         return s3.lib ? { ...s3, libName: liberoName, libId: liberoId } : s3;
       }),
     };
@@ -1120,22 +1200,10 @@ export default function RotationBoard() {
   const byId = useMemo(() => Object.fromEntries(roster.map((e) => [e.id, e])), [roster]);
   const lineup = useMemo(() => court.map((id) => byId[id]), [court, byId]);
   const mySetCount = useMemo(() => sets.filter((x) => x.teamId === activeId).length, [sets, activeId]);
-  // 位置模式的標籤：同位置有兩人時標 砲1／砲2
-  const roleTag = useMemo(() => {
-    const group = {};
-    court.forEach((id) => {
-      const e = byId[id];
-      if (!e || !e.role) return;
-      (group[e.role] = group[e.role] || []).push(id);
-    });
-    const out = {};
-    Object.entries(group).forEach(([role, ids]) => {
-      ids.forEach((id, i) => {
-        out[id] = (ROLE_ABBR[role] || "？") + (ids.length > 1 ? String(i + 1) : "");
-      });
-    });
-    return out;
-  }, [court, byId]);
+  const roleNum = roleNumbers(court, byId, teamMode);
+  // 圖上圈內／全圖左欄的位置簡寫：依號位算有效位置，再補上同位置的編號
+  const tagAt = (e, pos) =>
+    (e ? (ROLE_ABBR[effRole(e, pos, teamMode)] || "？") + (roleNum[e.id] || "") : "？");
   const zoneEntry = (p) => byId[court[p - 1]];
   const zoneOf = (id) => court.indexOf(id) + 1; // 0 = 板凳
 
@@ -1148,9 +1216,9 @@ export default function RotationBoard() {
       if (bad.length) out.push(`第 ${r + 1} 輪接發：${bad[0]}`);
     }
     return out;
-  }, [lineup, anchors, recvMode]);
+  }, [lineup, anchors, recvMode, teamMode]);
 
-  const clashes = useMemo(() => backConflicts(lineup, backMode), [lineup, backMode]);
+  const clashes = useMemo(() => backConflicts(lineup, backMode, teamMode), [lineup, backMode, teamMode]);
 
   /* ---- 比賽追蹤 ---- */
   const mLineup = useMemo(
@@ -1272,7 +1340,7 @@ export default function RotationBoard() {
   // 按模式：只清空場上陣容，隊員名單原封不動；之後填進哪個號位就套用該號位的位置
   const applyPreset = (key) =>
     patchTeam((t) => ({ ...t, mode: key, court: [...EMPTY_COURT] }));
-  const zoneRole = (p) => (team && team.mode ? PRESETS[team.mode][p - 1] : null);
+  const zoneRole = (p) => ((teamMode && PRESETS[teamMode]) ? PRESETS[teamMode][p - 1] : null);
   // 改動場上陣容時，若有模式就把位置同步成該號位應有的角色
   const setCourtSynced = (fn) =>
     patchTeam((t) => {
@@ -1393,7 +1461,7 @@ export default function RotationBoard() {
 
         const colX = (i) => PAD + LABEL_W + CW * i + (i >= 2 ? GAP : 0);
 
-        txt("雙舉輪轉表", PAD, PAD + 15, { size: 15, weight: 800, align: "left" });
+        txt("排球輪轉表", PAD, PAD + 15, { size: 15, weight: 800, align: "left" });
         const gy = PAD + HEAD - 20;
         txt("發球權", colX(0) + CW, gy, { size: 9.5, color: C.muted });
         txt("對方進攻", colX(2) + CW * 1.5, gy, { size: 9.5, color: C.muted });
@@ -1410,7 +1478,7 @@ export default function RotationBoard() {
           const occ = occupancy(lineup, r);
           [...FRONT, ...BACK].forEach((pz, n) => {
             const e = occ[pz];
-            const lb = e ? (showRole ? roleTag[e.id] || ROLE_ABBR[e.role] || "？" : e.name || "？") : "？";
+            const lb = e ? (showRole ? tagAt(e, pz) : e.name || "？") : "？";
             txt(lb, PAD + 14 + (n % 3) * 26, oy + 32 + Math.floor(n / 3) * 20,
               { size: String(lb).length > 1 ? 12 : 14, weight: 800 });
           });
@@ -1459,31 +1527,42 @@ export default function RotationBoard() {
     });
 
   // 單舉有三輪舉球在後排，六個號位都要能編；其餘模式舉球一定在前排，只有 P2/P3/P4
-  const RECV_POS = team && team.mode === "單舉" ? [1, 2, 3, 4, 5, 6] : [2, 3, 4];
+  /* 定點頁的模式：只決定「要編哪一組定點」，不會動到 team.mode／court／roster。
+     預設跟著隊伍模式；隊伍還沒選模式就用第一個 */
+  const aMode = (anchorMode && PRESETS[anchorMode]) ? anchorMode
+    : (teamMode && PRESETS[teamMode]) ? teamMode : MODE_KEYS[0];
+  const switchAnchorMode = (m) => {
+    setAnchorMode(m);
+    const keys = anchorSetKeys(m, recvMode);
+    setEditKey((k) => (keys.includes(k) ? k : keys[0])); // 這一套在新模式沒有就跳回第一套
+  };
+  const RECV_POS = MODE_RECV_POS[aMode] || [2, 3, 4];
+  const DEF_LABEL = [["L", "副攻攻擊"], ["C", "中間攻擊"], ["R", "大砲攻擊"]];
   const EDIT_SETS = [
-    ...RECV_POS.map((p) => ({
-      key: `recv.${recvMode}.P${p}`,
-      label: `舉球在${p}號位`,
-      get: (A) => (A.recv[recvMode] || A.recv.R5)["P" + p],
+    ...RECV_POS.map((q) => ({
+      key: `recv.${recvMode}.P${q}`,
+      label: `舉球在${q}號位`,
+      get: (A) => (A.recv[recvMode] || A.recv.R5)["P" + q],
       ball: null,
+      grp: "接發",
     })),
-    { key: "def.A.L", label: "副攻攻擊", get: (A) => A.def.A.L, ball: "L" },
-    { key: "def.A.C", label: "中間攻擊", get: (A) => A.def.A.C, ball: "C" },
-    { key: "def.A.R", label: "大砲攻擊", get: (A) => A.def.A.R, ball: "R" },
-    { key: "def.M.L", label: "副攻攻擊", get: (A) => A.def.M.L, ball: "L" },
-    { key: "def.M.C", label: "中間攻擊", get: (A) => A.def.M.C, ball: "C" },
-    { key: "def.M.R", label: "大砲攻擊", get: (A) => A.def.M.R, ball: "R" },
-    { key: "def.B.L", label: "副攻攻擊", get: (A) => A.def.B.L, ball: "L" },
-    { key: "def.B.C", label: "中間攻擊", get: (A) => A.def.B.C, ball: "C" },
-    { key: "def.B.R", label: "大砲攻擊", get: (A) => A.def.B.R, ball: "R" },
+    ...(MODE_DEF_VARS[aMode] || ["M", "A", "B"]).flatMap((v) =>
+      DEF_LABEL.map(([d, lb]) => ({
+        key: `def.${v}.${d}`, label: lb, get: (A) => A.def[v][d], ball: d, grp: DEF_VAR_NAME[v],
+      }))),
   ];
+  // 依 grp 分排（接發一排、每套防守各一排），排的數量會隨模式改變
+  const EDIT_ROWS = EDIT_SETS.reduce((rows, st) => {
+    const row = rows.find(([g]) => g === st.grp);
+    if (row) row[1].push(st); else rows.push([st.grp, [st]]);
+    return rows;
+  }, []);
   const cur = EDIT_SETS.find((s) => s.key === editKey) || EDIT_SETS[0];
   const curKey = cur.key; // editKey 可能過期，實際生效的是這個
   const curSet = cur.get(anchors) || {};
   // 前排三點的名稱隨防守套數而不同：
-  // 砲中 砲／中／舉・砲背 砲／舉／背・單舉 砲／中／背
+  // 砲中 砲／中／舉・砲背 砲／舉／背・砲中背 砲／中／背
   const defVar = curKey.startsWith("def.") ? curKey.split(".")[1] : null;
-  const DEF_VAR_NAME = { M: "砲中", A: "砲背", B: "單舉" };
   const ANCHOR_LABEL = {
     FL: "砲", FC: defVar === "A" ? "舉" : "中", FR: defVar === "M" ? "舉" : "背",
     BL: "後排", BC: "後排", BR: "後排",
@@ -1492,10 +1571,8 @@ export default function RotationBoard() {
   const VALID_KEYS = isRecv
     ? ["1", "2", "3", "4", "5", "6"]
     : ["FL", "FC", "FR", "BL", "BC", "BR"];
-  // 有選模式時，接發的點顯示位置（舉／砲／中／背）而不是號位數字
-  const recvLab = isRecv && team && team.mode
-    ? recvZoneLabels(team.mode, Number(curKey.slice(-1)))
-    : null;
+  // 接發的點顯示位置（舉／砲／中／背）而不是號位數字，依定點頁選到的模式算
+  const recvLab = isRecv ? recvZoneLabels(aMode, Number(curKey.slice(-1))) : null;
   const editSpots = VALID_KEYS.filter((k) => curSet[k]).map((k) => ({
     key: k, label: (recvLab && recvLab[k]) || ANCHOR_LABEL[k] || k, xy: curSet[k],
   }));
@@ -1548,7 +1625,7 @@ export default function RotationBoard() {
       `}</style>
       <div className="flex items-baseline justify-between mb-2 no-print">
         <div>
-          <div style={{ fontSize: 19, fontWeight: 800 }}>雙舉輪轉板</div>
+          <div style={{ fontSize: 19, fontWeight: 800 }}>排球輪轉板</div>
           <div style={{ fontSize: 11, color: C.muted }}>
             {team ? team.name : "尚未選擇團隊"}
           </div>
@@ -1798,9 +1875,23 @@ export default function RotationBoard() {
             ))}
           </div>
           <div style={{ fontSize: 10.5, color: C.muted, marginTop: 4, lineHeight: 1.8 }}>
-            {backMode === "def" && "大砲守中・攔中／副攻守左・舉球守右・自由球員守左"}
+            {backMode === "def" && backRuleText(teamMode)}
             {backMode === "none" && "全部依基本輪轉順序：5號位→左、6號位→中、1號位→右"}
             {backMode === "custom" && "點場上球員逐一指定；沒指定的人依基本輪轉順序遞補"}
+          </div>
+
+          <div className="flex items-center gap-1 flex-wrap mt-2">
+            <span style={{ fontSize: 11, color: C.muted }}>自由球員：</span>
+            <select value={liberoId || ""} onChange={(e) => setLiberoId(e.target.value)}
+              style={{
+                fontFamily: FONT, fontSize: 12, padding: "5px 6px", borderRadius: 8,
+                border: `1px solid ${liberoId ? C.ink : C.edge}`, background: C.panel, color: C.ink,
+              }}>
+              <option value="">未指定（圖上顯示 L）</option>
+              {roster.map((e) => (
+                <option key={e.id} value={e.id}>{e.name || "？"}</option>
+              ))}
+            </select>
           </div>
 
           {clashes.length > 0 && (
@@ -1854,23 +1945,6 @@ export default function RotationBoard() {
 
           {/* 隊員名單（可收合、可儲存） */}
           <div style={{ borderTop: `1px solid ${C.edge}`, marginTop: 12, paddingTop: 10 }}>
-            <div className="flex items-center gap-1 flex-wrap mb-2">
-              <span style={{ fontSize: 11, color: C.muted }}>自由球員：</span>
-              <select value={liberoId || ""} onChange={(e) => setLiberoId(e.target.value)}
-                style={{
-                  fontFamily: FONT, fontSize: 12, padding: "5px 6px", borderRadius: 8,
-                  border: `1px solid ${liberoId ? C.ink : C.edge}`, background: C.panel, color: C.ink,
-                }}>
-                <option value="">未指定（圖上顯示 L）</option>
-                {roster.map((e) => (
-                  <option key={e.id} value={e.id}>{e.name || "？"}</option>
-                ))}
-              </select>
-              <span style={{ fontSize: 10.5, color: C.muted }}>
-                指定後圖上顯示他的名字，失誤等記錄也會算到他頭上
-              </span>
-            </div>
-
             <div className="flex items-center justify-between mb-2">
               <div style={{ fontSize: 13, fontWeight: 800 }}>
                 隊員名單
@@ -2759,7 +2833,7 @@ export default function RotationBoard() {
           ))}
         </div>
         <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
-          <div className="print-title" style={{ fontSize: 16, fontWeight: 800, marginBottom: 6 }}>雙舉輪轉表</div>
+          <div className="print-title" style={{ fontSize: 16, fontWeight: 800, marginBottom: 6 }}>排球輪轉表</div>
           <div style={{ minWidth: 632 }}>
             <div className="flex" style={{ paddingLeft: 92, marginBottom: 2 }}>
               <div style={{ width: 200, ...groupHead }}>發球權</div>
@@ -2782,7 +2856,7 @@ export default function RotationBoard() {
                   <div className="flex flex-wrap" style={{ marginTop: 2 }}>
                     {[...FRONT, ...BACK].map((p) => {
                       const e = occupancy(lineup, r)[p];
-                      const txt = e ? (showRole ? roleTag[e.id] || ROLE_ABBR[e.role] || "？" : e.name || "？") : "？";
+                      const txt = e ? (showRole ? tagAt(e, p) : e.name || "？") : "？";
                       return (
                         <span key={p} style={{
                           width: "33.3%", fontSize: String(txt).length > 1 ? 12 : 14, fontWeight: 800,
@@ -2865,10 +2939,21 @@ export default function RotationBoard() {
             )}
           </div>
           <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>
-            拖動任一個點，全部輪轉同步更新，並自動儲存。這六套表<b>只屬於這一隊</b>，改動不影響其他隊伍。
-            防守的前排點只要<b>碰到網線</b>就算是那一套的攔網球員，記錄比賽時攔網那排會正常顯示，沒碰到的則淡化。
+            拖動任一個點，全部輪轉同步更新，並自動儲存。這些定點<b>只屬於這一隊</b>，改動不影響其他隊伍。
           </div>
-          <div className="flex items-center gap-1 mb-2">
+          {/* 第一行：要編哪一組定點。純篩選，不會動到 team.mode、場上陣容與名單 */}
+          <div className="flex items-center gap-1 mb-2 flex-wrap">
+            <span style={{ fontSize: 11, color: C.muted, width: 30, flexShrink: 0 }}>模式</span>
+            {MODE_KEYS.map((m) => (
+              <button key={m} onClick={() => switchAnchorMode(m)}
+                style={{ ...btn, fontSize: 11, padding: "5px 8px", background: aMode === m ? C.ink : C.panel, color: aMode === m ? C.paper : C.ink }}>
+                {m}
+              </button>
+            ))}
+            <span style={{ fontSize: 10.5, color: C.muted, marginLeft: 4 }}>只是挑要編哪一套，不會改到隊伍設定</span>
+          </div>
+          {/* 第二行：接發人數（全圖也跟著換） */}
+          <div className="flex items-center gap-1 mb-2 flex-wrap">
             <span style={{ fontSize: 11, color: C.muted, width: 30, flexShrink: 0 }}>人數</span>
             {[["R3", "3人接發"], ["R4", "4人接發"], ["R5", "5人接發"]].map(([m, l]) => (
               <button key={m} onClick={() => switchRecvMode(m)}
@@ -2878,13 +2963,9 @@ export default function RotationBoard() {
             ))}
             <span style={{ fontSize: 10.5, color: C.muted, marginLeft: 4 }}>全圖也會跟著換</span>
           </div>
-          {[
-            ["接發", EDIT_SETS.slice(0, RECV_POS.length)],
-            ["砲背", EDIT_SETS.slice(RECV_POS.length, RECV_POS.length + 3)],
-            ["砲中", EDIT_SETS.slice(RECV_POS.length + 3, RECV_POS.length + 6)],
-            ["單舉", EDIT_SETS.slice(RECV_POS.length + 6)],
-          ].map(([g, sets]) => (
-            <div key={g} className="flex items-center gap-1 mb-2">
+          {/* 第三行起：這個模式真正會用到的接發與防守套別 */}
+          {EDIT_ROWS.map(([g, sets]) => (
+            <div key={g} className="flex items-center gap-1 mb-2 flex-wrap">
               <span style={{ fontSize: 11, color: C.muted, width: 30, flexShrink: 0 }}>{g}</span>
               {sets.map((s) => (
                 <button key={s.key} onClick={() => setEditKey(s.key)}
@@ -2907,50 +2988,39 @@ export default function RotationBoard() {
               borderRadius: 10, padding: 12,
             }}>
               <div style={{ fontSize: 12, fontWeight: 800 }}>輪轉排序</div>
-              {!team.mode ? (
-                <div style={{ fontSize: 10.5, color: C.muted, lineHeight: 1.7, marginTop: 6 }}>
-                  尚未選擇模式，到①名單按一下砲中／砲背／單舉
-                </div>
-              ) : (
+              <div style={{ fontSize: 10.5, color: C.muted, marginTop: 2, marginBottom: 8 }}>
+                {/* 接發那幾套跟著上面選到的模式，防守那幾套只標自己的套別 */}
+                {aMode}・{DEF_VAR_NAME[defVar] ? `${DEF_VAR_NAME[defVar]}・` : ""}{cur.label}
+              </div>
+              {recvLab ? (
                 <>
-                  <div style={{ fontSize: 10.5, color: C.muted, marginTop: 2, marginBottom: 8 }}>
-                    {/* 接發那幾套跟著隊伍模式走，防守那幾套只標自己的套別（砲中／砲背／單舉） */}
-                    {DEF_VAR_NAME[defVar] || team.mode}・{cur.label}
-                  </div>
-                  {recvLab ? (
-                    <>
-                      {[["前排", FRONT], ["後排", BACK]].map(([lab, zs]) => (
-                        <div key={lab} className="flex items-start" style={{ marginBottom: 6 }}>
-                          <span style={{ fontSize: 10, color: C.muted, width: 28, flexShrink: 0, paddingTop: 13 }}>{lab}</span>
-                          {zs.map((z) => (
-                            <span key={z} style={{ width: 40, textAlign: "center" }}>
-                              <span style={{ display: "block", fontFamily: MONO, fontSize: 9.5, color: C.muted }}>{z}號</span>
-                              <span style={{ display: "block", fontSize: 16, fontWeight: 800, lineHeight: 1.2 }}>{recvLab[z]}</span>
-                            </span>
-                          ))}
-                        </div>
+                  {[["前排", FRONT], ["後排", BACK]].map(([lab, zs]) => (
+                    <div key={lab} className="flex items-start" style={{ marginBottom: 6 }}>
+                      <span style={{ fontSize: 10, color: C.muted, width: 28, flexShrink: 0, paddingTop: 13 }}>{lab}</span>
+                      {zs.map((z) => (
+                        <span key={z} style={{ width: 40, textAlign: "center" }}>
+                          <span style={{ display: "block", fontFamily: MONO, fontSize: 9.5, color: C.muted }}>{z}號</span>
+                          <span style={{ display: "block", fontSize: 16, fontWeight: 800, lineHeight: 1.2 }}>{recvLab[z]}</span>
+                        </span>
                       ))}
-                      <div style={{ fontSize: 10, color: C.muted, marginTop: 2 }}>左到右為場上由左至右</div>
-                    </>
-                  ) : (
-                    <div style={{ fontSize: 10.5, color: C.muted, lineHeight: 1.7 }}>
-                      {isRecv ? "這個模式排不出這一套" : "防守套別不對應特定輪次"}
                     </div>
-                  )}
+                  ))}
+                  <div style={{ fontSize: 10, color: C.muted, marginTop: 2 }}>左到右為場上由左至右</div>
                 </>
+              ) : (
+                <div style={{ fontSize: 10.5, color: C.muted, lineHeight: 1.7 }}>
+                  防守套別不對應特定輪次
+                </div>
               )}
             </div>
           </div>
           <div style={{ fontSize: 11, color: C.muted, marginTop: 8, lineHeight: 1.7 }}>
-            接發的點 3人／4人／5人各一套；選過模式（砲中／砲背／單舉）時會直接顯示位置，否則顯示號位數字。
-            4人接發時把不接的那兩位拖到網前即可；<b>3人接發目前只排開舉球與副攻，還剩 4 人在接</b>，
-            第三個不接發的人請自行拖走。單舉有三輪舉球在後排，接發會多出「舉球在1／5／6號位」三套，
-            預設值是暫定的基準陣型，請拉點校準。
-            防守分三套：<b>砲背</b>＝前排有副攻、<b>砲中</b>＝前排有攔中、<b>單舉</b>＝前排沒有舉球
-            （單舉才會輪到；前兩套互為對角，雙舉時每輪只會出現一個）。前排三點：
-            砲中＝砲（左）・中（中）・舉（右）；砲背＝砲（左）・<b>舉（中）</b>・<b>背（右）</b>；
-            單舉＝砲（左）・中（中）・<b>背（右）</b>；
+            上面「模式」只是挑要編哪一組定點，第三、四行就是該模式真正用得到的套別。
+            接發每種人數各一套；4人接發把不接的那兩位拖到網前即可，
+            <b>3人接發目前只排開舉球與副攻，還剩 4 人在接</b>，第三個不接發的人請自行拖走。
+            防守前排三點：砲中＝砲・中・<b>舉</b>；砲背＝砲・<b>舉</b>・背；砲中背＝砲・中・背（由左至右）；
             後排點按照基本輪轉順序，除非適用特殊規則。
+            前排的點只要碰到網線就算那一套的攔網球員。
           </div>
           <div className="flex gap-2 mt-2">
             <button onClick={() => setAnchors(JSON.parse(JSON.stringify(DEFAULT_ANCHORS)))} style={btn}>
@@ -2979,7 +3049,7 @@ export default function RotationBoard() {
                     手機長按圖片即可存到相簿，或直接分享到群組
                   </div>
                   <div className="flex gap-1">
-                    <a href={pngUrl} download="雙舉輪轉表.png"
+                    <a href={pngUrl} download="排球輪轉表.png"
                       style={{ ...btn, background: C.ink, color: C.paper, fontWeight: 700, textDecoration: "none" }}>
                       下載
                     </a>
