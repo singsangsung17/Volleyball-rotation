@@ -153,9 +153,9 @@ const PIN_SLOT = { L: "BL", C: "BC", R: "BR" };
 const PIN_NAME = { L: "守左", C: "守中", R: "守右" };
 // 前排的點只要圓圈碰得到網線（半徑 9／100），就視為那一套的攔網球員
 const NET_TOUCH = 0.09;
-// 防守頁畫記號時，中心點 y 落在這條線以內就算「網前」＝攔網，其餘算地板防守。
-// 比 NET_TOUCH 寬鬆一些，手畫的圈本來就會比球員的圈大；覺得太鬆或太緊就改這個數字
-const NET_ZONE = 0.22;
+// 防守頁畫記號時，筆畫本身要碰到網線（y=0）才算攔網——只看整筆最高的那個點。
+// 這是容許的手誤：畫到 y 還差一點點也認。覺得太鬆或太緊就改這個數字
+const NET_TOUCH_INK = 0.02;
 const FRONT_SLOTS = ["FL", "FC", "FR"];
 
 // 後排三格分配，三層優先序：
@@ -2223,16 +2223,14 @@ export default function RotationBoard() {
                   : [["o", "接起", C.blue], ["x", "失誤", C.red]];
                 const KIND_NAME = { o: isAtk ? "過網" : "接起", x: "失誤", v: "得分" };
                 const KIND_COLOR = { o: C.blue, x: C.red, v: C.green };
-                // 這一筆墨跡的中心點畫在網前嗎（只有防守頁分網前／非網前）
-                const inNet = (k) => {
-                  if (!isDef || !k || k.pts.length < 2) return false;
-                  const ys = k.pts.map((q) => q[1]);
-                  return ys.reduce((a, b) => a + b, 0) / ys.length <= NET_ZONE;
-                };
+                // 這一筆有沒有碰到網線：只看整筆最高的那個點，畫在網附近但沒碰到就不算攔網
+                const inNet = (k) => (
+                  isDef && !!k && k.pts.length > 1
+                  && Math.min(...k.pts.map((q) => q[1])) <= NET_TOUCH_INK);
                 /* 認出來的手勢會不會送出：
                    攻擊頁 圈／勾／斜線 都收；
-                   防守頁網前 圈＝攔網 touch、勾＝攔網得分，斜線交給下面的按鈕指定；
-                   其餘（防守頁非網前、接發頁）維持原本行為，勾當成沒認出來 */
+                   碰到網線 圈＝攔網 touch、勾＝攔網得分，斜線交給下面的按鈕指定；
+                   其餘（沒碰到網線的防守、接發頁）維持原本行為，勾當成沒認出來 */
                 const willCommit = (g, k) => !!g && (isAtk ? true : inNet(k) ? g !== "x" : g !== "v");
                 const commit = (kind) => {
                   if (!ink || ink.pts.length < 2 || pending) return;
@@ -2241,9 +2239,9 @@ export default function RotationBoard() {
                   const cy = ys.reduce((a, b) => a + b, 0) / ys.length;
                   const fm = mForm(isAtk ? "atk" : isDef ? (ink.dir === "L" ? "d3" : ink.dir === "C" ? "d2" : "d1") : "recv");
                   if (!fm.ok) { clearInk(); return; }
-                  // 網前畫的記號＝攔網：記到離墨跡最近的「前排」那位，後排不算
-                  if (isDef && cy <= NET_ZONE) {
-                    if (kind === "x") return; // 斜線在網前沒有對應動作，墨跡留著讓使用者按按鈕
+                  // 碰到網線的記號＝攔網：記到離墨跡最近的「前排」那位，後排不算
+                  if (inNet(ink)) {
+                    if (kind === "x") return; // 斜線碰到網線沒有對應動作，墨跡留著讓使用者按按鈕
                     const front = fm.spots.filter((q) => FRONT_SLOTS.includes(q.slot));
                     const bmk = markAt(front.length ? front : fm.spots, cx, cy, kind, ink.dir);
                     clearInk();
@@ -2387,21 +2385,12 @@ export default function RotationBoard() {
                         clearInk();
                         setBFlash({ a: { page: "def", kind, by: blockBy }, label, col });
                       };
-                      const big = (label, kind, col, filled, w) => (
-                        <button key={kind} onClick={() => fire(kind, label, col)} disabled={!!bFlash}
+                      // touch 與得分改成用畫的（圈到網子），這裡只留三種失分
+                      const lose = (label, kind) => (
+                        <button key={kind} onClick={() => fire(kind, label, C.red)} disabled={!!bFlash}
                           style={{
-                            ...btn, flex: w, minWidth: 0, padding: "13px 0", fontSize: 14, fontWeight: 800,
-                            background: filled ? col : C.panel, color: filled ? "#fff" : col,
-                            border: `2px solid ${col}`,
-                          }}>
-                          {label}
-                        </button>
-                      );
-                      const small = (label, kind, col, w) => (
-                        <button key={kind} onClick={() => fire(kind, label, col)} disabled={!!bFlash}
-                          style={{
-                            ...btn, flex: w, minWidth: 0, padding: "13px 0", fontSize: 11.5, fontWeight: 800,
-                            background: col, color: "#fff", border: `2px solid ${col}`,
+                            ...btn, flex: 1, minWidth: 0, padding: "13px 0", fontSize: 13, fontWeight: 800,
+                            background: C.red, color: "#fff", border: `2px solid ${C.red}`,
                           }}>
                           {label}
                         </button>
@@ -2447,15 +2436,14 @@ export default function RotationBoard() {
                             )}
                           </div>
                           <div className="flex gap-1" style={{ alignItems: "stretch" }}>
-                            {big("touch", "touch", C.blue, true, 1.4)}
-                            {big("得分", "blockPoint", C.green, true, 1.4)}
-                            {small("touch out", "blockOut", C.red, 1.2)}
-                            {small("觸網", "netTouch", C.red, 1)}
-                            {small("越界", "overLine", C.red, 1)}
+                            {lose("touch out", "blockOut")}
+                            {lose("觸網", "netTouch")}
+                            {lose("越界", "overLine")}
                           </div>
                           <div style={{ fontSize: 10.5, color: C.muted, marginTop: 5, lineHeight: 1.8 }}>
-                            <b>touch</b>＝攔到但球還在場上，留在這一頁繼續畫記號。沒點球員也能按，只是不會算到個人。
-                            也可以直接在<b>網前</b>畫圈（touch）或打勾（得分），會算給離記號最近的前排球員。
+                            <b>攔到球</b>用畫的：筆畫<b>圈到網子</b>就算攔網——畫圈＝touch（球還在場上，留在這一頁繼續畫）、
+                            打勾＝得分，都會算給離記號最近的前排球員。沒碰到網子的圈還是接起、斜線還是防守失誤。
+                            上面這三顆是<b>攔網失分</b>：先點誰攔的，再按按鈕。
                           </div>
                         </div>
                       );
