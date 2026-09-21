@@ -153,6 +153,9 @@ const PIN_SLOT = { L: "BL", C: "BC", R: "BR" };
 const PIN_NAME = { L: "守左", C: "守中", R: "守右" };
 // 前排的點只要圓圈碰得到網線（半徑 9／100），就視為那一套的攔網球員
 const NET_TOUCH = 0.09;
+// 防守頁畫記號時，中心點 y 落在這條線以內就算「網前」＝攔網，其餘算地板防守。
+// 比 NET_TOUCH 寬鬆一些，手畫的圈本來就會比球員的圈大；覺得太鬆或太緊就改這個數字
+const NET_ZONE = 0.22;
 const FRONT_SLOTS = ["FL", "FC", "FR"];
 
 // 後排三格分配，三層優先序：
@@ -1355,7 +1358,8 @@ export default function RotationBoard() {
   useEffect(() => {
     if (!pending) return;
     const t = setTimeout(() => {
-      act({ page: pending.page, mark: pending.mark });
+      // 攔網手勢會自己帶動作（touch／得分），其餘就是把記號送出去
+      act(pending.act || { page: pending.page, mark: pending.mark });
       setPending(null);
     }, 420);
     return () => clearTimeout(t);
@@ -2219,6 +2223,17 @@ export default function RotationBoard() {
                   : [["o", "接起", C.blue], ["x", "失誤", C.red]];
                 const KIND_NAME = { o: isAtk ? "過網" : "接起", x: "失誤", v: "得分" };
                 const KIND_COLOR = { o: C.blue, x: C.red, v: C.green };
+                // 這一筆墨跡的中心點畫在網前嗎（只有防守頁分網前／非網前）
+                const inNet = (k) => {
+                  if (!isDef || !k || k.pts.length < 2) return false;
+                  const ys = k.pts.map((q) => q[1]);
+                  return ys.reduce((a, b) => a + b, 0) / ys.length <= NET_ZONE;
+                };
+                /* 認出來的手勢會不會送出：
+                   攻擊頁 圈／勾／斜線 都收；
+                   防守頁網前 圈＝攔網 touch、勾＝攔網得分，斜線交給下面的按鈕指定；
+                   其餘（防守頁非網前、接發頁）維持原本行為，勾當成沒認出來 */
+                const willCommit = (g, k) => !!g && (isAtk ? true : inNet(k) ? g !== "x" : g !== "v");
                 const commit = (kind) => {
                   if (!ink || ink.pts.length < 2 || pending) return;
                   const xs = ink.pts.map((q) => q[0]), ys = ink.pts.map((q) => q[1]);
@@ -2226,6 +2241,21 @@ export default function RotationBoard() {
                   const cy = ys.reduce((a, b) => a + b, 0) / ys.length;
                   const fm = mForm(isAtk ? "atk" : isDef ? (ink.dir === "L" ? "d3" : ink.dir === "C" ? "d2" : "d1") : "recv");
                   if (!fm.ok) { clearInk(); return; }
+                  // 網前畫的記號＝攔網：記到離墨跡最近的「前排」那位，後排不算
+                  if (isDef && cy <= NET_ZONE) {
+                    if (kind === "x") return; // 斜線在網前沒有對應動作，墨跡留著讓使用者按按鈕
+                    const front = fm.spots.filter((q) => FRONT_SLOTS.includes(q.slot));
+                    const bmk = markAt(front.length ? front : fm.spots, cx, cy, kind, ink.dir);
+                    clearInk();
+                    setPending({
+                      page: "def",
+                      mark: bmk,
+                      label: kind === "o" ? "攔網 touch" : "攔網得分",
+                      // 找不到前排就不猜是誰；欄位與按鈕按出來的完全一樣
+                      act: { page: "def", kind: kind === "o" ? "touch" : "blockPoint", by: front.length ? bmk.playerId : null },
+                    });
+                    return;
+                  }
                   const mk = markAt(fm.spots, cx, cy, kind, ink.dir);
                   if (isAtk && mk.dist > 0.16) { clearInk(); setNote("記號要畫在球員身上"); return; }
                   clearInk();
@@ -2236,13 +2266,12 @@ export default function RotationBoard() {
                   else if (phase === "move") setInk((k) => (k && k.dir === dir ? { ...k, pts: [...k.pts, pt] } : k));
                   else if (ink && ink.pts.length > 1) {
                     const g = recognize(ink.pts);
-                    // 勾（得分）只有攻擊頁有意義，其他頁畫到勾就當成沒認出來
-                    if (g && (isAtk || g !== "v")) commit(g);
+                    if (willCommit(g, ink)) commit(g);
                   }
                 };
                 const dirs = [["L", "副攻"], ["C", "中間"], ["R", "大砲"]];
                 const raw = ink ? recognize(ink.pts) : null;
-                const guess = raw && (isAtk || raw !== "v") ? raw : null;
+                const guess = willCommit(raw, ink) ? raw : null;
                 return (
                   <div>
                     {(() => {
@@ -2327,7 +2356,7 @@ export default function RotationBoard() {
                           fontSize: 16, fontWeight: 800, color: "#fff",
                           background: KIND_COLOR[pending.mark.kind], borderRadius: 8, padding: "3px 12px",
                         }}>
-                          {pending.mark.kind === "o" ? "○" : pending.mark.kind === "x" ? "✕" : "✓"} {KIND_NAME[pending.mark.kind]}
+                          {pending.mark.kind === "o" ? "○" : pending.mark.kind === "x" ? "✕" : "✓"} {pending.label || KIND_NAME[pending.mark.kind]}
                         </span>
                       )}
                       {!pending && note && (
@@ -2426,6 +2455,7 @@ export default function RotationBoard() {
                           </div>
                           <div style={{ fontSize: 10.5, color: C.muted, marginTop: 5, lineHeight: 1.8 }}>
                             <b>touch</b>＝攔到但球還在場上，留在這一頁繼續畫記號。沒點球員也能按，只是不會算到個人。
+                            也可以直接在<b>網前</b>畫圈（touch）或打勾（得分），會算給離記號最近的前排球員。
                           </div>
                         </div>
                       );
