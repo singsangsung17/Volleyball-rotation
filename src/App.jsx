@@ -248,6 +248,16 @@ function backConflicts(lineup, mode, teamMode) {
   return out;
 }
 
+/* 只想看輪轉、還沒指定球員時，用「佔位球員」頂替那一格：
+   有指定球員就用本人；沒有人但模式排得出位置，就生一個只存在於計算過程的虛擬球員。
+   它永遠不會被寫進 team.court／team.roster，存檔裡看不到它。 */
+const slotEntry = (pos, role) => ({ id: `slot-${pos}`, name: null, role, placeholder: true });
+const fillSlots = (entries, teamMode) => {
+  const seq = (teamMode && PRESETS[teamMode]) || null;
+  if (!seq || entries.every(Boolean)) return entries;
+  return entries.map((e, i) => e || slotEntry(i + 1, seq[i]));
+};
+
 function occupancy(lineup, r) {
   const occ = {};
   for (let p = 1; p <= 6; p++) occ[p] = lineup[(p - 1 + r) % 6];
@@ -310,7 +320,7 @@ const liberoIn = (e, pos, keepServer) => !!(e && e.libero) && BACK.includes(pos)
 
 // 站位解析：{ok, spots:[{pos, e, xy, lib}]} 或 {ok:false, reason}
 function formation(lineup, r, sceneId, A, recvMode, pri, backMode, weServe, ovBack, teamMode) {
-  if (lineup.length !== 6 || lineup.some((e) => !e)) return { ok: false, reason: "名單未滿 6 人" };
+  if (lineup.length !== 6 || lineup.some((e) => !e)) return { ok: false, reason: "有格子還沒排位置" };
   const occ = occupancy(lineup, r);
 
   if (sceneId === "recv") {
@@ -350,7 +360,7 @@ function formation(lineup, r, sceneId, A, recvMode, pri, backMode, weServe, ovBa
 // 位置錯誤檢查（僅接發：擊球瞬間的相對順序）
 function checkLegal(spots) {
   const at = {}, who = {};
-  spots.forEach((s) => { at[s.pos] = s.xy; who[s.pos] = (s.e && s.e.name) || "？"; });
+  spots.forEach((s) => { at[s.pos] = s.xy; who[s.pos] = (s.e && (s.e.name || ROLE_ABBR[s.e.role])) || "？"; });
   const bad = [];
   const nm = (p) => `${who[p]}（${p}號位）`;
   const fb = (f, b) => { if (at[f][1] >= at[b][1]) bad.push(`${nm(f)} 站得比 ${nm(b)} 還後面`); };
@@ -895,7 +905,9 @@ function Court({ spots, ball, size = 96, fluid, svgRef, onDown, labels, flag, by
         const label = labels
           ? (s.label || s.key)
           : byRole ? (s.lib ? "L" : s.tag || ROLE_ABBR[s.e.role] || "？")
-            : s.lib ? (s.libName || "L") : s.e.name;
+            // 名字模式：沒指定球員的格子退而顯示位置簡寫（圈圈裝不下長字）
+            : s.lib ? (s.libName || "L") : s.e.name || s.tag || ROLE_ABBR[s.e.role] || "？";
+        const ghost = !labels && !byRole && !!(s.e && s.e.placeholder); // 還沒指定的人：淡色
         const dimmed = dimSlots && s.slot && dimSlots.includes(s.slot);
         return (
           <g key={s.key || (s.e && s.e.id) || i}
@@ -908,7 +920,7 @@ function Court({ spots, ball, size = 96, fluid, svgRef, onDown, labels, flag, by
             <text x={toPx(s.xy[0])} y={toPy(s.xy[1]) + 3.4} textAnchor="middle"
               fontSize={labels ? (String(label).length > 1 ? 6.5 : 8) : String(label).length > 1 ? 8 : 10}
               fontFamily={s.lib ? MONO : FONT}
-              fontWeight={s.lib ? 800 : 600} fill={s.lib ? C.paper : C.ink}>
+              fontWeight={s.lib ? 800 : 600} fill={s.lib ? C.paper : ghost ? C.muted : C.ink}>
               {label}
             </text>
           </g>
@@ -1280,7 +1292,8 @@ export default function RotationBoard() {
   };
 
   const byId = useMemo(() => Object.fromEntries(roster.map((e) => [e.id, e])), [roster]);
-  const lineup = useMemo(() => court.map((id) => byId[id]), [court, byId]);
+  // 場上六格：沒指定球員的格子由模式補上佔位球員（見 fillSlots）
+  const lineup = useMemo(() => fillSlots(court.map((id) => byId[id]), teamMode), [court, byId, teamMode]);
   const mySetCount = useMemo(() => sets.filter((x) => x.teamId === activeId).length, [sets, activeId]);
   // 全圖左欄／輸出 PNG 的位置簡寫：那一輪算一次
   const tagOf = (lu, r, e) => (e ? roleTagsAt(lu, r, teamMode)[e.id] || "？" : "？");
@@ -1298,7 +1311,7 @@ export default function RotationBoard() {
     return out;
   }, [lineup, anchors, recvMode, teamMode]);
 
-  const clashes = useMemo(() => backConflicts(lineup, backMode, teamMode), [lineup, backMode, teamMode]);
+  const clashes = backConflicts(lineup, backMode, teamMode); // 六輪 × 三人，直接算就好
 
   /* ---- 比賽追蹤 ---- */
   const mLineup = useMemo(
@@ -1530,12 +1543,13 @@ export default function RotationBoard() {
               ctx.lineWidth = 1.4;
               ctx.stroke();
             }
+            const ghost = !showRole && !!(sp.e && sp.e.placeholder);
             const lab = showRole
               ? (sp.lib ? "L" : sp.tag || ROLE_ABBR[sp.e.role] || "？")
-              : sp.lib ? (sp.libName || "L") : sp.e.name || "？";
+              : sp.lib ? (sp.libName || "L") : sp.e.name || sp.tag || ROLE_ABBR[sp.e.role] || "？";
             txt(lab, cx, cy + 3.4, {
               size: String(lab).length > 1 ? 8 : 10,
-              weight: sp.lib ? 800 : 600, color: sp.lib ? C.paper : C.ink,
+              weight: sp.lib ? 800 : 600, color: sp.lib ? C.paper : ghost ? C.muted : C.ink,
             });
           });
         };
@@ -1559,9 +1573,9 @@ export default function RotationBoard() {
           const occ = occupancy(lineup, r);
           [...FRONT, ...BACK].forEach((pz, n) => {
             const e = occ[pz];
-            const lb = e ? (showRole ? tagOf(lineup, r, e) : e.name || "？") : "？";
+            const lb = e ? (showRole || !e.name ? tagOf(lineup, r, e) : e.name) : "？";
             txt(lb, PAD + 14 + (n % 3) * 26, oy + 32 + Math.floor(n / 3) * 20,
-              { size: String(lb).length > 1 ? 12 : 14, weight: 800 });
+              { size: String(lb).length > 1 ? 12 : 14, weight: 800, color: e && e.placeholder && !showRole ? C.muted : C.ink });
           });
           SCENES.forEach((sc, i) => {
             const fm = form(lineup, r, sc.id);
@@ -1995,13 +2009,15 @@ export default function RotationBoard() {
                     <span style={{ fontFamily: MONO, fontSize: 11, color: C.muted, width: 26 }}>R{c.r + 1}</span>
                     <span style={{ fontSize: 12, fontWeight: 700, width: 40 }}>{PIN_NAME[c.slot]}</span>
                     {c.players.map((e) => (
-                      <button key={e.id} onClick={() => setPri(c.r, c.slot, e.id)}
+                      // 還沒指定球員的格子沒有個人設定可調，顯示位置簡寫但不能點
+                      <button key={e.id} onClick={e.placeholder ? undefined : () => setPri(c.r, c.slot, e.id)}
+                        disabled={!!e.placeholder}
                         style={{
                           ...btn, padding: "4px 10px", fontWeight: 700,
                           background: win === e.id ? C.blue : C.panel,
-                          color: win === e.id ? "#fff" : C.ink,
+                          color: e.placeholder ? C.muted : win === e.id ? "#fff" : C.ink,
                         }}>
-                        {e.name || "？"}
+                        {e.name || ROLE_ABBR[e.role] || "？"}
                       </button>
                     ))}
                     {!win && <span style={{ fontSize: 10.5, color: C.muted }}>未指定＝先輪到的先取</span>}
@@ -2113,7 +2129,9 @@ export default function RotationBoard() {
                 一局 25 分，24 平之後要領先 2 分。輪轉由程式自動處理——只有在我方接發時得分才會轉一格。
               </div>
               {court.some((id) => !id) ? (
-                <div style={{ fontSize: 12, color: C.warn }}>場上還沒滿 6 人，先到①名單排好陣容。</div>
+                <div style={{ fontSize: 12, color: C.warn, lineHeight: 1.8 }}>
+                  比賽記錄需要指定球員。只想看輪轉的話，到③全圖就可以。
+                </div>
               ) : (
                 <>
                   <input value={matchName} onChange={(e) => setMatchName(e.target.value)}
@@ -2844,7 +2862,7 @@ export default function RotationBoard() {
                     return (
                       <div style={{ maxWidth: 300, margin: "0 auto" }}>
                         {fm.ok ? <Court spots={fm.spots} fluid marks={mk} />
-                          : <div style={{ fontSize: 12, color: C.warn }}>名單未滿六人，畫不出球場。</div>}
+                          : <div style={{ fontSize: 12, color: C.warn }}>還有格子沒排位置：到①名單按一個模式，或把人排進場上。</div>}
                         <div style={{ fontSize: 10.5, color: C.muted, marginTop: 4, textAlign: "center" }}>
                           共 {mk.length} 個記號
                         </div>
@@ -2957,11 +2975,12 @@ export default function RotationBoard() {
                   <div className="flex flex-wrap" style={{ marginTop: 2 }}>
                     {[...FRONT, ...BACK].map((p) => {
                       const e = occupancy(lineup, r)[p];
-                      const txt = e ? (showRole ? tagOf(lineup, r, e) : e.name || "？") : "？";
+                      const txt = e ? (showRole || !e.name ? tagOf(lineup, r, e) : e.name) : "？";
                       return (
                         <span key={p} style={{
                           width: "33.3%", fontSize: String(txt).length > 1 ? 12 : 14, fontWeight: 800,
-                          lineHeight: 1.45, color: C.ink, textAlign: "center",
+                          lineHeight: 1.45, textAlign: "center",
+                          color: e && e.placeholder && !showRole ? C.muted : C.ink,
                         }}>
                           {txt}
                         </span>
