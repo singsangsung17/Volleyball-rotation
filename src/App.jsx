@@ -252,10 +252,15 @@ function backConflicts(lineup, mode, teamMode) {
    有指定球員就用本人；沒有人但模式排得出位置，就生一個只存在於計算過程的虛擬球員。
    它永遠不會被寫進 team.court／team.roster，存檔裡看不到它。 */
 const slotEntry = (pos, role) => ({ id: `slot-${pos}`, name: null, role, placeholder: true });
-const fillSlots = (entries, teamMode) => {
+/* rot＝這一隊「位置對號位」的偏移量（team.slotRot，0–5）。
+   有名字的人輪轉時是人在 court 裡移動，位置跟著人走；
+   沒有名字的格子沒有東西可以移動，所以改由這個偏移量帶著轉。
+   兩者一起轉，號位與位置的對應才不會錯開。 */
+const slotRoleAt = (seq, zoneIdx, rot) => seq[(zoneIdx + (rot || 0)) % 6];
+const fillSlots = (entries, teamMode, rot) => {
   const seq = (teamMode && PRESETS[teamMode]) || null;
   if (!seq || entries.every(Boolean)) return entries;
-  return entries.map((e, i) => e || slotEntry(i + 1, seq[i]));
+  return entries.map((e, i) => e || slotEntry(i + 1, slotRoleAt(seq, i, rot)));
 };
 
 function occupancy(lineup, r) {
@@ -1105,7 +1110,7 @@ const anchorSetKeys = (mode, rm) => [
 ];
 const uid = (p) => p + Math.random().toString(36).slice(2, 8);
 const newTeam = (name) => ({
-  id: uid("t"), name, roster: [], court: [...EMPTY_COURT], mode: null, pri: {}, backMode: "def", tweaks: {}, liberoId: null,
+  id: uid("t"), name, roster: [], court: [...EMPTY_COURT], mode: null, slotRot: 0, pri: {}, backMode: "def", tweaks: {}, liberoId: null,
   anchors: JSON.parse(JSON.stringify(DEFAULT_ANCHORS)), recvMode: "R5",
 });
 
@@ -1176,6 +1181,8 @@ export default function RotationBoard() {
   const pri = (team && team.pri) || {};
   // 隊伍模式：引擎要靠它判斷砲中背(雙)的舉球這一輪算副攻還是舉球
   const teamMode = (team && team.mode) || null;
+  // 位置對號位的偏移量：只有沒指定球員的格子會用到（見 fillSlots）
+  const slotRot = (team && team.slotRot) || 0;
   const backMode = (team && team.backMode) || "def";
   const setBackMode = (m) => patchTeam((t) => ({ ...t, backMode: m }));
   // 定點與接發人數每隊一份；結構不完整（例如還沒升級的存檔）就用預設補齊，畫面不會壞
@@ -1293,10 +1300,12 @@ export default function RotationBoard() {
 
   const byId = useMemo(() => Object.fromEntries(roster.map((e) => [e.id, e])), [roster]);
   // 場上六格：沒指定球員的格子由模式補上佔位球員（見 fillSlots）
-  const lineup = useMemo(() => fillSlots(court.map((id) => byId[id]), teamMode), [court, byId, teamMode]);
+  const lineup = useMemo(() => fillSlots(court.map((id) => byId[id]), teamMode, slotRot), [court, byId, teamMode, slotRot]);
   const mySetCount = useMemo(() => sets.filter((x) => x.teamId === activeId).length, [sets, activeId]);
   // 全圖左欄／輸出 PNG 的位置簡寫：那一輪算一次
   const tagOf = (lu, r, e) => (e ? roleTagsAt(lu, r, teamMode)[e.id] || "？" : "？");
+  // 六個號位都取得到位置（有球員或模式排得出來）就算可以輪轉
+  const lineupReady = lineup.length === 6 && lineup.every(Boolean);
   const zoneEntry = (p) => byId[court[p - 1]];
   const zoneOf = (id) => court.indexOf(id) + 1; // 0 = 板凳
 
@@ -1433,8 +1442,9 @@ export default function RotationBoard() {
   // 套用模式：場上六格依號位填好位置，名字清空等待重填（板凳球員不動）
   // 按模式：只清空場上陣容，隊員名單原封不動；之後填進哪個號位就套用該號位的位置
   const applyPreset = (key) =>
-    patchTeam((t) => ({ ...t, mode: key, court: [...EMPTY_COURT] }));
-  const zoneRole = (p) => ((teamMode && PRESETS[teamMode]) ? PRESETS[teamMode][p - 1] : null);
+    patchTeam((t) => ({ ...t, mode: key, court: [...EMPTY_COURT], slotRot: 0 }));
+  const zoneRole = (p) => (
+    (teamMode && PRESETS[teamMode]) ? slotRoleAt(PRESETS[teamMode], p - 1, slotRot) : null);
   // 改動場上陣容時，若有模式就把位置同步成該號位應有的角色
   const setCourtSynced = (fn) =>
     patchTeam((t) => {
@@ -1443,12 +1453,24 @@ export default function RotationBoard() {
       if (!seq) return { ...t, court: nextCourt };
       const roster = t.roster.map((e) => {
         const z = nextCourt.indexOf(e.id);
-        return z >= 0 ? { ...e, role: seq[z] } : e;
+        // 位置要跟「這一格現在顯示的位置」一致，所以同樣要算上偏移量
+        return z >= 0 ? { ...e, role: slotRoleAt(seq, z, t.slotRot) } : e;
       });
       return { ...t, court: nextCourt, roster };
     });
-  const rotateOne = () => setCourt((cur) => [...cur.slice(1), cur[0]]);
-  const rotateBack = () => setCourt((cur) => [cur[5], ...cur.slice(0, 5)]);
+  /* 輪轉：場上的人往前挪一格（1→6→5→4→3→2→1），
+     沒有指定球員的格子沒有東西可挪，靠 slotRot 帶著位置一起轉。
+     court 本身仍然只存球員 id 或 null，不會被塞進虛擬球員。 */
+  const rotateOne = () => patchTeam((t) => ({
+    ...t,
+    court: [...t.court.slice(1), t.court[0]],
+    slotRot: ((t.slotRot || 0) + 1) % 6,
+  }));
+  const rotateBack = () => patchTeam((t) => ({
+    ...t,
+    court: [t.court[5], ...t.court.slice(0, 5)],
+    slotRot: ((t.slotRot || 0) + 5) % 6,
+  }));
   // 規則寫在人身上；再點一次同一格＝取消
   const clearAllPins = () =>
     setRoster((R) => R.map((e) => (e.libero || e.back ? { ...e, libero: false, back: null } : e)));
@@ -1604,16 +1626,18 @@ export default function RotationBoard() {
     }, 30);
   };
   // 場上同位置（恰好兩人）的配對，供一鍵互換
+  // 場上同位置（恰好兩格）的配對，供一鍵互換。沒指定球員的格子也算，
+  // 但兩格都沒人時互換看不出差別，所以至少要有一個真人才列出來
   const sameRolePairs = useMemo(() => {
     const byRole = {};
-    court.forEach((id, i) => {
-      const e = byId[id];
+    lineup.forEach((e, i) => {
       if (!e || !e.role) return;
       (byRole[e.role] = byRole[e.role] || []).push(i);
     });
-    return ROLE_LIST.filter((r) => (byRole[r] || []).length === 2)
+    return ROLE_LIST
+      .filter((r) => (byRole[r] || []).length === 2 && byRole[r].some((i) => lineup[i] && !lineup[i].placeholder))
       .map((r) => ({ role: r, idx: byRole[r] }));
-  }, [court, byId]);
+  }, [lineup]);
   const swapSame = (idx) =>
     setCourt((cur) => {
       const n = [...cur];
@@ -2038,8 +2062,11 @@ export default function RotationBoard() {
             </div>
           )}
           <div className="flex gap-2 mt-2 flex-wrap">
-            <button onClick={rotateOne} style={btn}>整隊輪轉一格</button>
-            <button onClick={rotateBack} style={btn}>逆轉一格</button>
+            {/* 六個號位都排得出位置（有人或有模式）就能轉，不必每一格都指定球員 */}
+            <button onClick={rotateOne} disabled={!lineupReady}
+              style={{ ...btn, opacity: lineupReady ? 1 : 0.4 }}>整隊輪轉一格</button>
+            <button onClick={rotateBack} disabled={!lineupReady}
+              style={{ ...btn, opacity: lineupReady ? 1 : 0.4 }}>逆轉一格</button>
             <button onClick={() => setTab("sheet")}
               style={{ ...btn, background: C.ink, color: C.paper, fontWeight: 700 }}>
               產生輪轉 →
